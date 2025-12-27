@@ -1,0 +1,175 @@
+id,goal,base_output,steered_output,base_valid,steered_valid,ft_output,ft_valid
+0,"Check for pickup restaurant available in Boston, NY on March 18, 5pm with just one guest","Search for restaurants that offer pickup services and have a location within Boston, NY.
+{
+  ""restaurants"": [
+    {
+      ""name"": ""pickup restaurant"",
+      ""location"": {
+        ""city"": ""Boston"",
+        ""state"": ""NY","Open Google Maps API URL and search for ""pickup restaurant"" in Boston, NY within 5 minutes of 5pm (18:00) using the following parameters:
+{
+  ""query"": ""pickup restaurant"",
+  ""location"": {",False,False,"{""action"": ""click"", ""target"": ""125""}",True
+1,"Book a winery tour in Napa Valley in a winery which serves Mediterranean cuisine with wine testing for 4 guests on April 15, 10 am in a outdoor setup.","Search for wineries that offer Mediterranean cuisine and wine tasting tours.
+Actions in this sequence result in the following flow:
+1. Retrieve all wineries from the API endpoint
+2. Filter wineries based on their availability status (e.g., ""in","{
+  ""action"": ""navigate_to_url"",
+  ""url"": ""https://www.example.com/book-a-winery-tour-in-napa-valley-in-a-winery-which-serves-mediterranean-cuisine-with-wine-testing-for",False,False,"{""action"": ""click"", ""target"": ""105""}",True
+2,Find a mini van at Brooklyn City from April 5th to April 8th for a 22 year old renter.,"Search Google Maps API
+{
+  ""query"": ""mini van Brooklyn City April 5th - April 8th renter 22 years""
+}","Search Google Maps API
+{
+  ""query"": ""mini van Brooklyn, NY, NY, NY, NY, NY""
+}",True,True,"{""action"": ""click"", ""target"": ""124""}",True
+3,"Compare the fare types to book a 1-adult ticket from Springfiels, IL to Austin, TX for April 29th 2023","```json
+{
+  ""action"": ""search"",
+  ""query"": {
+    ""location"": {
+      ""city"": ""Springfield, IL"",
+      ""state"": ""IL""
+    },
+    ""date"": ""April 29","```json
+{
+  ""action"": ""compare_fare_types"",
+  ""params"": {
+    ""from_location"": ""Springfield, IL"",
+    ""to_location"": ""Austin, TX"",
+    ""date"": ""April 29",False,False,"{""action"": ""click"", ""target"": ""132""}",True
+4,"Get an SUV with an additional driver and wifi for pick up in  any rental location near Washington regional airport on June 1, 11 am, and drop off at Washington international airport on June 2, 11 am, and pay for the booking instantly.","Search for available SUVs with an additional driver and wifi
+{
+  ""query"": {
+    ""type"": ""vehicle"",
+    ""model"": ""SUV"",
+    ""driver"": ""additional_driver"",
+    ""wifi"": true,
+    ""pickup","{""action"": ""web automation"", ""target"": ""https://www.example.com/suvpickup"", ""parameters"": {""location"": ""Washington regional airport"", ""date"": ""June 1, 11am"", ""time"": ""11",False,False,"{""action"": ""click"", ""target"": ""179""}",True
+5,Find a men's UA outlet T-shirt of XL size and add to cart.,"Open webpage
+{
+  ""action"": ""open_webpage"",
+  ""args"": {
+    ""url"": ""https://www.example.com""
+  }
+}","Open webpage in front-end browser
+{
+  ""action"": ""Open Webpage""
+}",True,True,"{""action"": ""click"", ""target"": ""124""}",True
+6,Browse for wall art with a price range of $25 to $50.,"Search for ""wall art"" using the search bar and click on the first result.
+Actions that lead directly to the same location as the previous one are also options. For example, searching for ""wall art"" will open up another page in your browser","Open search bar
+{",False,False,"{""action"": ""click"", ""target"": ""125""}",True
+7,Add the cheapest Women's Sweaters to my shopping cart.,"{
+  ""action"": ""add_to_cart"",
+  ""item_id"": ""284""
+}","{
+  ""action"": ""add_to_cart"",
+  ""item_id"": ""284""
+}",True,True,"{""action"": ""click"", ""target"": ""124""}",True
+8,Find a cheapest SUV in Brooklyn for 1 day.,"Search for the cheapest SUV in Brooklyn using an API or search engine, then use a web scraping tool to extract information about it (price, model, year, etc.). Store this data in a database or spreadsheet for further analysis. Ensure that your code","Search for cheapest SUVs in Brooklyn using the ""cheapest_suv"" API endpoint with the query parameter set to ""Brooklyn"". Here is the JSON object representing the next step after the current HTML code:
+```json
+{
+  ""action"":",False,False,"{""action"": ""click"", ""target"": ""136""}",True
+9,"From Birmingham (BHX) to Paris search for packages with casinos, restaurant, fitness and a free internet from April 7th to 11th.","Search for packages with casinos, restaurant, fitness and a free internet in the specified date range using the provided API endpoint. Here is the next step:
+
+```json
+{
+  ""api_endpoint"": ""https://example-api.com/search"",
+  ""query","Open a new tab in your browser window. To open a new tab in your current web page:
+```
+javascript:location.href = 'newtab.html';
+```",False,False,"{""action"": ""click"", ""target"": ""155""}",True
+10,Find a comedy movie streaming on Netflix and add to watchlist.,"Go to Netflix homepage
+Action: Click ""Add to Watchlist""
+Action: Scroll down to find a comedy movie
+Action: Select a comedy movie from the list
+Action: Click ""Add to Watchlist"" button
+Action: Add the selected","navigate to https://www.netflix.com/
+Action: click on ""Add to Watchlist""
+Action: wait for the page to load
+Action: find and select the comedy movie from the search results
+Action: click on ""Add to Watchlist""",False,False,"{""action"": ""click"", ""target"": ""15453""}",True
+11,Book parking spot for James SMith at Stewart Hotel in New York for 2 hours. The street address is 133 st avenue in New York. Zip code is 10001 and phone number is 888888888. The email address is buckeye.foobar@gmail.com. Employer's name is Gua AB.,"Send an email to Buckeye.foobar@gmail.com with the following content:
+{
+  ""email"": ""buckeye.foobar@gmail.com"",
+  ""message"": ""Dear Buckeye.foobar@gmail.com,
+I am writing to request a parking spot","{
+  ""action"": ""book"",
+  ""location"": {
+    ""street_address"": ""133 st avenue, New York, NY 10001, USA"",
+    ""zip_code"": ""10001"",",False,False,"{""action"": ""click"", ""target"": ""126""}",True
+12,Find motorcycle parking near Radio City Music Hall.,"Search for nearby locations using the ""nearby"" API endpoint.
+{
+  ""location"": {
+    ""latitude"": -33.8687,
+    ""longitude"": 151.2090
+  },
+  ""","Search for ""motorcycle parking"" in the search bar and click on ""radio city music hall"".
+{""action"": ""search"", ""query"": ""motorcycle parking radio city music hall"", ""click"": true}",False,True,"{""action"": ""click"", ""target"": ""123""}",True
+13,Browse events happening at Madison Square Garden.,"Use JavaScript to navigate to the event page and click on ""Events"".
+{
+  ""event_page_url"": ""https://www.eventbriteapi.com/v3/events/"",
+  ""click_event_button"": ""events"",
+  ""event_selector"": "".event","Open Google Maps and search for ""Madison Square Garden"".
+{
+  ""event"": {
+    ""type"": ""browse"",
+    ""location"": {
+      ""lat"": -25,
+      ""lng"": 139
+    },",False,False,"{""action"": ""click"", ""target"": ""108""}",True
+14,Find parking in New York City from June 5th to 9th.,"Search for parking services on Google Maps API
+{
+  ""query"": {
+    ""location"": {
+      ""lat"": -34,
+      ""lng"": 151
+    },
+    ""date_range"": {
+      ""start_date"":","Search for ""parking"" using the query string parameter
+{""query"": ""parking""}",False,True,"{""action"": ""click"", ""target"": ""197""}",True
+15,Get quote for Amtrak vacation for two adults across country while leaving from Chicago on the 22nd of April. It should include Deluxe bedroom. The passenger is named John Mark with email address of johnmark@gmail.com and phone number of 234567890.,"Search for Amtrak vacation packages
+{
+  ""query"": {
+    ""type"": ""vacation"",
+    ""date"": ""2023-04-22"",
+    ""country"": ""US"",
+    ""adults"":","{
+  ""query"": {
+    ""name"": ""John Mark"",
+    ""email"": ""johnmark@gmail.com"",
+    ""phone"": ""234567890"",
+    ""destination"": ""Chicago, IL"",
+    """,False,False,"{""action"": ""click"", ""target"": ""169""}",True
+16,See today's deals on video games and find the best deal on the lowest-priced mouse.,"Navigate to the ""Today's Deals"" section of the website.
+{
+  ""url"": ""https://www.example.com/today-deals""
+}
+}","Navigate to the ""Today's Deals"" section of the website.
+{
+  ""url"": ""https://www.example.com/today-deals""
+}",False,True,"{""action"": ""click"", ""target"": ""85""}",True
+17,Find Metformin 1000mg tablet price and details.,"Use search engine to find information about metformin tablets
+{
+  ""query"": ""metformin tablets"",
+  ""search_engine"": ""Google""
+}","Open Google Chrome Web Browser
+{
+  ""action"": ""Open""
+}",True,True,"{""action"": ""click"", ""target"": ""146""}",True
+18,Add a pair of diamond stud earrings to the cart.,"Click on the ""Add to Cart"" button
+{","Click on the ""Add to Cart"" button
+{",False,False,"{""action"": ""click"", ""target"": ""124""}",True
+19,Find men's running shoes of size 9 with lowest price and add to bag.,"```json
+{
+  ""action"": ""find"",
+  ""query"": {
+    ""size"": ""9"",
+    ""price"": null,
+    ""sort_by"": ""price""
+  },
+  ""target"": {
+    ""type"": ""","Open search bar
+{
+  ""query"": ""men's running shoes, size 9, price, lowest""
+}",False,True,"{""action"": ""click"", ""target"": ""190""}",True

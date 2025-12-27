@@ -8,11 +8,12 @@ To control the output format of a small (0.5B) Language Model, forcing it to out
 ## Results
 **Success!** We extracted a "JSON-Vector" from `Qwen/Qwen2.5-0.5B-Instruct` using a synthetic contrastive dataset.
 
-| Condition | Coefficient | Output Behavior |
-| :--- | :--- | :--- |
-| **Baseline** | 0.0 | Ignores instructions, outputs "Click on 'Login' button..." and HTML snippets. |
-| **Steered** | **+2.0 (Layer 12)** | **Spontaneously generates JSON:** `Response: { "action": "click", "target": "..." }` |
-| **Negative** | -2.0 | Chatty, unstructured text. |
+| Condition | Coefficient | Output Behavior | Valid JSON Rate |
+| :--- | :--- | :--- | :--- |
+| **Baseline** | 0.0 | Ignores instructions, outputs "Click on 'Login' button..." and HTML snippets. | **20%** |
+| **Steered** | **+2.0 (Layer 12)** | **Spontaneously generates JSON:** `Response: { "action": "click", "target": "..." }` | **40%** |
+| **Negative** | -2.0 | Chatty, unstructured text. | N/A |
+| **Fine-Tuned** | N/A | Perfectly follows format. | **100%** |
 
 ## How to Run
 
@@ -20,26 +21,26 @@ To control the output format of a small (0.5B) Language Model, forcing it to out
     ```bash
     conda create -n steer python=3.10
     conda activate steer
-    pip install torch transformers accelerate scikit-learn numpy tqdm datasets
+    pip install torch transformers accelerate scikit-learn numpy tqdm datasets peft trl bitsandbytes
     ```
 
-2.  **Generate Dataset (Contrastive Pairs):**
+2.  **Generate Data:**
     ```bash
-    python src/dataset_generator.py
+    python src/dataset_generator.py       # POC Dataset (50 items)
+    python src/prepare_training_data.py   # Training Dataset (200 items)
     ```
-    *Creates `data/contrastive_dataset.json` from Mind2Web.*
 
-3.  **Extract Steering Vector:**
+3.  **Steering (Zero-Shot):**
     ```bash
     python src/extract_vector.py
+    python src/test_steering.py
     ```
-    *Saves vectors to `vectors/steering_vectors.json`.*
 
-4.  **Test/Sweep:**
+4.  **Fine-Tuning:**
     ```bash
-    python src/sweep_layers.py
+    python src/train.py
+    python src/evaluate.py  # Generates results.csv
     ```
-    *Runs the model with and without the vector on a test prompt.*
 
 ## Methodology
 1.  **Dataset:** We constructed 50 pairs of (JSON vs. Chat) completions for the same HTML inputs using the Mind2Web dataset.
