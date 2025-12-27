@@ -1,0 +1,17 @@
+# Data
+data/
+vectors/
+results.csv
+
+# Models
+finetuned_model/
+*.safetensors
+*.bin
+
+# Python
+__pycache__/
+*.pyc
+
+# IDEs
+.vscode/
+.idea/
