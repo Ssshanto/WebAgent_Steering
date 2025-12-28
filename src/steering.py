@@ -1,3 +1,4 @@
+import argparse
 import torch
 import json
 import numpy as np
@@ -12,14 +13,17 @@ COEFF = 2.0
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 class SteeredModel:
-    def __init__(self):
-        print(f"Loading {MODEL_NAME}...")
-        self.tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+    def __init__(self, model_name=MODEL_NAME, layer_idx=LAYER_IDX, coeff=COEFF, apply_mode="all_tokens"):
+        print(f"Loading {model_name}...")
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         self.model = AutoModelForCausalLM.from_pretrained(
-            MODEL_NAME, 
+            model_name, 
             torch_dtype=torch.float16 if DEVICE=="cuda" else torch.float32,
             device_map="auto"
         )
+        self.layer_idx = layer_idx
+        self.coeff = coeff
+        self.apply_mode = apply_mode
         self.vector = None
         self._vector_cache = {}
 
@@ -49,9 +53,9 @@ class SteeredModel:
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
         # Get state from target layer, last token
-        return out.hidden_states[LAYER_IDX][0, -1, :].cpu().numpy()
+        return out.hidden_states[self.layer_idx][0, -1, :].cpu().numpy()
 
-    def generate(self, prompt, steer=False):
+    def generate(self, prompt, steer=False, max_new_tokens=40):
         inputs = self.tokenizer(prompt, return_tensors="pt").to(DEVICE)
         
         # Define Hook
@@ -66,16 +70,34 @@ class SteeredModel:
                     return vec
 
                 if torch.is_tensor(output):
-                    output += COEFF * vec_for(output)
+                    vec = vec_for(output)
+                    if self.apply_mode == "last_token":
+                        if output.dim() == 3:
+                            output[:, -1, :] += self.coeff * vec
+                        elif output.dim() == 2:
+                            output[-1, :] += self.coeff * vec
+                        else:
+                            output += self.coeff * vec
+                    else:
+                        output += self.coeff * vec
                 elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
-                    output[0] += COEFF * vec_for(output[0])
+                    vec = vec_for(output[0])
+                    if self.apply_mode == "last_token":
+                        if output[0].dim() == 3:
+                            output[0][:, -1, :] += self.coeff * vec
+                        elif output[0].dim() == 2:
+                            output[0][-1, :] += self.coeff * vec
+                        else:
+                            output[0] += self.coeff * vec
+                    else:
+                        output[0] += self.coeff * vec
             return output
 
         # Register Hook
-        handle = self.model.model.layers[LAYER_IDX].register_forward_hook(hook)
+        handle = self.model.model.layers[self.layer_idx].register_forward_hook(hook)
         
         # Generate
-        out = self.model.generate(**inputs, max_new_tokens=40, do_sample=False)
+        out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         text = self.tokenizer.decode(out[0], skip_special_tokens=True)
         
         handle.remove()
@@ -95,12 +117,30 @@ def is_valid_json(text):
 def run():
     import pandas as pd
     from tqdm import tqdm
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model-name", default=MODEL_NAME)
+    parser.add_argument("--layer-idx", type=int, default=LAYER_IDX)
+    parser.add_argument("--coeff", type=float, default=COEFF)
+    parser.add_argument("--apply-mode", choices=["all_tokens", "last_token"], default="all_tokens")
+    parser.add_argument("--extract-samples", type=int, default=50)
+    parser.add_argument("--eval-samples", type=int, default=500)
+    parser.add_argument("--eval-offset", type=int, default=None)
+    parser.add_argument("--max-new-tokens", type=int, default=40)
+    parser.add_argument("--out-csv", default="full_results.csv")
+    args = parser.parse_args()
     
     # 1. Setup
-    agent = SteeredModel()
+    agent = SteeredModel(
+        model_name=args.model_name,
+        layer_idx=args.layer_idx,
+        coeff=args.coeff,
+        apply_mode=args.apply_mode,
+    )
     
     # Fetch enough data for Extraction (50) + Evaluation (500)
-    total_needed = 550
+    eval_offset = args.eval_offset if args.eval_offset is not None else args.extract_samples
+    total_needed = max(args.extract_samples, eval_offset + args.eval_samples)
     print(f"Fetching {total_needed} samples from Mind2Web...")
     all_data = get_contrastive_pairs(total_needed)
     
@@ -109,10 +149,14 @@ def run():
         return
 
     # Split
-    train_pairs = all_data[:50]
-    eval_pairs = all_data[50:]
+    train_pairs = all_data[:args.extract_samples]
+    eval_pairs = all_data[eval_offset:eval_offset + args.eval_samples]
     
-    print(f"Splitting data: {len(train_pairs)} for Extraction, {len(eval_pairs)} for Evaluation.")
+    print(
+        f"Config: layer={args.layer_idx} coeff={args.coeff} mode={args.apply_mode} "
+        f"extract={len(train_pairs)} eval={len(eval_pairs)} eval_offset={eval_offset} "
+        f"max_new_tokens={args.max_new_tokens}"
+    )
     
     # 2. Extract Vector (using train set)
     agent.extract_vector(train_pairs)
@@ -127,15 +171,15 @@ def run():
         prompt = prompt_template.format(html=item['html'][:1000], goal=item['goal'])
         
         # Base Run
-        base_out = agent.generate(prompt, steer=False)
+        base_out = agent.generate(prompt, steer=False, max_new_tokens=args.max_new_tokens)
         base_valid = is_valid_json(base_out)
         
         # Steered Run
-        steered_out = agent.generate(prompt, steer=True)
+        steered_out = agent.generate(prompt, steer=True, max_new_tokens=args.max_new_tokens)
         steered_valid = is_valid_json(steered_out)
         
         results.append({
-            "id": i,
+            "id": eval_offset + i,
             "goal": item['goal'],
             "base_output": base_out,
             "base_valid": base_valid,
@@ -145,16 +189,16 @@ def run():
         
         # Periodic Save (every 50)
         if (i+1) % 50 == 0:
-            pd.DataFrame(results).to_csv("full_results.csv", index=False)
+            pd.DataFrame(results).to_csv(args.out_csv, index=False)
             
     # Final Save
     df = pd.DataFrame(results)
-    df.to_csv("full_results.csv", index=False)
+    df.to_csv(args.out_csv, index=False)
     
     print("\n--- RESULTS ---")
     print(f"Base Valid Rate:    {df['base_valid'].mean():.2%}")
     print(f"Steered Valid Rate: {df['steered_valid'].mean():.2%}")
-    print("Saved to full_results.csv")
+    print(f"Saved to {args.out_csv}")
 
 if __name__ == "__main__":
     run()
