@@ -54,9 +54,10 @@ class SteeredModel:
         # Define Hook
         def hook(module, input, output):
             if steer and self.vector is not None:
-                # Add vector to output of the layer
-                # output[0] is (batch, seq, hidden)
-                output[0][:, :, :] += COEFF * self.vector
+                if torch.is_tensor(output):
+                    output += COEFF * self.vector
+                elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
+                    output[0] += COEFF * self.vector
             return output
 
         # Register Hook
