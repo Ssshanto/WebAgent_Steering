@@ -69,31 +69,80 @@ class SteeredModel:
         handle.remove()
         return text[len(prompt):].strip()
 
+def is_valid_json(text):
+    try:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start != -1 and end != -1:
+            json.loads(text[start:end+1])
+            return True
+    except:
+        pass
+    return False
+
 def run():
+    import pandas as pd
+    from tqdm import tqdm
+    
     # 1. Setup
     agent = SteeredModel()
-    pairs = get_contrastive_pairs(30)
     
-    # 2. Extract
-    agent.extract_vector(pairs)
+    # Fetch enough data for Extraction (50) + Evaluation (500)
+    total_needed = 550
+    print(f"Fetching {total_needed} samples from Mind2Web...")
+    all_data = get_contrastive_pairs(total_needed)
     
-    # 3. Evaluate
-    print("\n--- EVALUATION (Sample) ---")
+    if not all_data:
+        print("ERROR: No data found! Check dataset download.")
+        return
+
+    # Split
+    train_pairs = all_data[:50]
+    eval_pairs = all_data[50:]
+    
+    print(f"Splitting data: {len(train_pairs)} for Extraction, {len(eval_pairs)} for Evaluation.")
+    
+    # 2. Extract Vector (using train set)
+    agent.extract_vector(train_pairs)
+    
+    # 3. Evaluate (using eval set)
+    print(f"\n--- STARTING EVALUATION ON {len(eval_pairs)} SAMPLES ---")
     prompt_template = "You are a web agent. Output strictly JSON.\n\nHTML: {html}...\nGoal: {goal}\nAction:"
     
-    for i in range(5): # Test first 5
-        item = pairs[i]
-        prompt = prompt_template.format(html=item['html'][:500], goal=item['goal'])
+    results = []
+    
+    for i, item in tqdm(enumerate(eval_pairs), total=len(eval_pairs)):
+        prompt = prompt_template.format(html=item['html'][:1000], goal=item['goal'])
         
-        print(f"\n[Goal]: {item['goal']}")
+        # Base Run
+        base_out = agent.generate(prompt, steer=False)
+        base_valid = is_valid_json(base_out)
         
-        # Baseline
-        base = agent.generate(prompt, steer=False)
-        print(f"Base:    {base}")
+        # Steered Run
+        steered_out = agent.generate(prompt, steer=True)
+        steered_valid = is_valid_json(steered_out)
         
-        # Steered
-        steered = agent.generate(prompt, steer=True)
-        print(f"Steered: {steered}")
+        results.append({
+            "id": i,
+            "goal": item['goal'],
+            "base_output": base_out,
+            "base_valid": base_valid,
+            "steered_output": steered_out,
+            "steered_valid": steered_valid
+        })
+        
+        # Periodic Save (every 50)
+        if (i+1) % 50 == 0:
+            pd.DataFrame(results).to_csv("full_results.csv", index=False)
+            
+    # Final Save
+    df = pd.DataFrame(results)
+    df.to_csv("full_results.csv", index=False)
+    
+    print("\n--- RESULTS ---")
+    print(f"Base Valid Rate:    {df['base_valid'].mean():.2%}")
+    print(f"Steered Valid Rate: {df['steered_valid'].mean():.2%}")
+    print("Saved to full_results.csv")
 
 if __name__ == "__main__":
     run()

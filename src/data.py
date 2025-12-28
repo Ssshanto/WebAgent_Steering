@@ -7,11 +7,12 @@ def get_contrastive_pairs(num_samples=50):
     Downloads Mind2Web (streaming) and constructs Positive (JSON) vs Negative (Chat) pairs.
     """
     print(f"Loading {num_samples} examples from Mind2Web...")
-    dataset = load_dataset("osunlp/Mind2Web", split="train", streaming=True)
+    # streaming=False to download full dataset (more robust)
+    dataset = load_dataset("osunlp/Mind2Web", split="train", streaming=False, cache_dir="dataset_cache")
     
     pairs = []
     
-    for sample in dataset:
+    for sample in tqdm(dataset):
         if len(pairs) >= num_samples:
             break
             
