@@ -21,6 +21,7 @@ class SteeredModel:
             device_map="auto"
         )
         self.vector = None
+        self._vector_cache = {}
 
     def extract_vector(self, pairs):
         print("Extracting steering vector...")
@@ -38,7 +39,9 @@ class SteeredModel:
         # PCA to find main direction
         pca = PCA(n_components=1)
         pca.fit(np.array(diffs))
-        self.vector = torch.tensor(pca.components_[0], device=DEVICE, dtype=self.model.dtype)
+        # Keep on CPU; move to the active layer device during hooks (device_map may shard layers).
+        self.vector = torch.tensor(pca.components_[0], device="cpu", dtype=torch.float32)
+        self._vector_cache.clear()
         print("Vector extracted.")
 
     def _get_last_token_state(self, text):
@@ -54,10 +57,18 @@ class SteeredModel:
         # Define Hook
         def hook(module, input, output):
             if steer and self.vector is not None:
+                def vec_for(tensor):
+                    dev = tensor.device
+                    vec = self._vector_cache.get(dev)
+                    if vec is None:
+                        vec = self.vector.to(device=dev, dtype=tensor.dtype)
+                        self._vector_cache[dev] = vec
+                    return vec
+
                 if torch.is_tensor(output):
-                    output += COEFF * self.vector
+                    output += COEFF * vec_for(output)
                 elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
-                    output[0] += COEFF * self.vector
+                    output[0] += COEFF * vec_for(output[0])
             return output
 
         # Register Hook
