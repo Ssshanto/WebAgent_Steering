@@ -144,7 +144,13 @@ def parse_mind2web_output(text):
         action = _normalize_action(match.group(1))
     match = VALUE_RE.search(text or "")
     if match:
-        value = match.group(1).splitlines()[0].strip()
+        raw = match.group(1)
+        raw = "" if raw is None else raw
+        raw = raw.strip()
+        if raw:
+            value = raw.splitlines()[0].strip()
+        else:
+            value = ""
     return {"answer": answer, "action": action, "value": value}
 
 
