@@ -65,7 +65,7 @@ class SteeredModel:
         self.vector = torch.tensor(vec, dtype=torch.float32, device="cpu")
         self._vector_cache.clear()
 
-    def generate(self, prompt, steer=False, max_new_tokens=80):
+    def generate(self, prompt, steer=False, max_new_tokens=80, strip_prompt=True):
         inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
 
         def hook(_module, _input, output):
@@ -101,9 +101,11 @@ class SteeredModel:
         for h in handles:
             h.remove()
 
-        if text.startswith(prompt):
-            return text[len(prompt) :].strip()
-        return text.strip()
+        if strip_prompt:
+            if text.startswith(prompt):
+                return text[len(prompt) :].strip()
+            return text.strip()
+        return text
 
 
 def dom_to_text(dom_elements, max_elems):
@@ -175,7 +177,7 @@ def split_steps(total_steps, num_tasks):
     return [base + (1 if i < extra else 0) for i in range(num_tasks)]
 
 
-def compute_vector(model, tasks, steps, max_elems):
+def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
     totals = None
     pbar = tqdm(total=steps, desc="vector")
     per_task = split_steps(steps, len(tasks))
@@ -188,7 +190,19 @@ def compute_vector(model, tasks, steps, max_elems):
             prompt = build_prompt(obs, max_elems)
             pos = f"{prompt}\n{POS_INSTR}"
             neg = f"{prompt}\n{NEG_INSTR}"
-            diff = model._last_token_state(pos) - model._last_token_state(neg)
+            pos_text = model.generate(
+                pos,
+                steer=False,
+                max_new_tokens=max_new_tokens,
+                strip_prompt=False,
+            )
+            neg_text = model.generate(
+                neg,
+                steer=False,
+                max_new_tokens=max_new_tokens,
+                strip_prompt=False,
+            )
+            diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
             totals = diff if totals is None else totals + diff
             pbar.update(1)
         env.close()
@@ -286,7 +300,7 @@ def main():
     model_name = MODEL_MAP[args.model_size]
     model = SteeredModel(model_name, layer_idx=args.layer, coeff=args.coeff)
 
-    compute_vector(model, tasks, args.train_steps, args.max_elems)
+    compute_vector(model, tasks, args.train_steps, args.max_elems, args.max_new_tokens)
     base_acc, steer_acc = evaluate(
         model,
         tasks,

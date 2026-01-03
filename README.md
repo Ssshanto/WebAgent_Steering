@@ -53,3 +53,8 @@ python src/miniwob_steer.py --model-size 3b --train-steps 200 --eval-steps 200
 ## Output
 - Progress bars show running base vs steered accuracy.
 - Results are saved as JSONL (one line per eval step).
+
+## Steering Details
+- The steering vector is computed from the **generated outputs** of two prompt variants
+  (JSON-only vs natural-language), not just from the prompt tokens. This aligns the
+  vector with the model's actual output behavior.
