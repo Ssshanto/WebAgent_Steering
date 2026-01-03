@@ -5,3 +5,4 @@ results.csv
 vectors/
 data/
 dataset_cache/
+local_run_log.md

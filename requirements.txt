@@ -1,11 +1,4 @@
 torch
 transformers
-accelerate
-scikit-learn
-numpy
-datasets
-pandas
+miniwob
 tqdm
-bitsandbytes
-peft
-trl
