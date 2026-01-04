@@ -56,5 +56,13 @@ python src/miniwob_steer.py --model-size 3b --train-steps 200 --eval-steps 200
 
 ## Steering Details
 - The steering vector is computed from the **generated outputs** of two prompt variants
-  (JSON-only vs natural-language), not just from the prompt tokens. This aligns the
+  (instruction-only vs natural-language), not just from the prompt tokens. This aligns the
   vector with the model's actual output behavior.
+## Action Format
+The model must output a single instruction line that matches the Appendix D regexes from
+the RCI paper (2303.17491), e.g.:
+```
+clickxpath //*[@data-ref="4"]
+type hello world
+```
+HTML elements in the prompt include `data-ref` attributes to make XPath targets executable.

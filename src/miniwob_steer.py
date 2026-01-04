@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+import re
 
 import gymnasium as gym
 import miniwob
@@ -36,9 +37,34 @@ SINGLE_STEP_TASKS = [
     "unicode-test",
 ]
 
-SYSTEM_PROMPT = "You are a web automation engine. Output a JSON action only."
-FORMAT_EXAMPLE = {"action": "CLICK|TYPE", "ref": 123, "text": "optional"}
-POS_INSTR = "Respond with strict JSON action only."
+SYSTEM_PROMPT = "You are a web automation engine. Output a single instruction."
+ACTION_FORMAT = (
+    "We have an autonomous computer control agent that can perform a set of instructions to control\n"
+    "computers.\n"
+    "First, given the instruction that matches the regular expression, <type regex>, it can type a list of\n"
+    "characters via the keyboard. This instruction should specify the target keyboard input for the\n"
+    "agent to type. Before this typing instruction, you should first locate the cursor by clicking the\n"
+    "input box with the click instruction.\n"
+    "Second, given the instruction that matches the regular expression, <press regex>, it can press a\n"
+    "specific key on the keyboard.\n"
+    "Third, given the instruction that matches the regular expression, <clickoption regex>, it can click\n"
+    "an option HTML element in a list with an XPath that is visible on the webpage. The target of\n"
+    "this instruction should be a valid XPath.\n"
+    "Fourth, given the instruction that matches the regular expression, <movemouse regex>, it can\n"
+    "move the mouse cursor on an HTML element with an XPath that is visible on the webpage.\n"
+    "Lastly, given the instruction that matches the regular expression, <clickxpath regex>, it can click\n"
+    "an HTML element with an XPath that is visible on the webpage. The target of this instruction\n"
+    "should be a valid XPath.\n"
+    "Listing 1: Regular expressions for specifying the admissible actions.\n"
+    "<type regex> = \"^type\\s.{1,}$\"\n"
+    "<press regex> = \"^press\\s(enter|arrowleft|arrowright|arrowup|arrowdown|backspace)$\"\n"
+    "<clickoption regex> = \"^clickoption\\s.{1,}$\"\n"
+    "<movemouse regex> = \"^movemouse\\s.{1,}$\"\n"
+    "<clickxpath regex> = \"^clickxpath\\s.{1,}$\"\n"
+    "HTML elements include data-ref attributes; use XPath that targets data-ref.\n"
+    "Output only a single instruction line that matches one of the regex patterns."
+)
+POS_INSTR = "Output only a single instruction line."
 NEG_INSTR = "Explain the action in natural language."
 
 
@@ -106,7 +132,7 @@ class SteeredModel:
         return text
 
 
-def dom_to_text(dom_elements, max_elems):
+def dom_to_html(dom_elements, max_elems):
     lines = []
     for el in dom_elements:
         text = (el.get("text") or "").strip().replace("\n", " ")
@@ -115,43 +141,88 @@ def dom_to_text(dom_elements, max_elems):
         classes = (el.get("classes") or "").strip()
         if not (text or value or elem_id or classes):
             continue
-        parts = [f"ref={el['ref']}", f"tag={el.get('tag', '')}"]
-        if text:
-            parts.append(f'text="{text}"')
-        if value:
-            parts.append(f'value="{value}"')
+        tag = el.get("tag") or "div"
+        attrs = [f'data-ref="{el["ref"]}"']
         if elem_id:
-            parts.append(f'id="{elem_id}"')
+            attrs.append(f'id="{elem_id}"')
         if classes:
-            parts.append(f'class="{classes}"')
-        lines.append(" ".join(parts))
+            attrs.append(f'class="{classes}"')
+        if value:
+            attrs.append(f'value="{value}"')
+        attr_text = " " + " ".join(attrs) if attrs else ""
+        lines.append(f"<{tag}{attr_text}>{text}</{tag}>")
         if len(lines) >= max_elems:
             break
     return "\n".join(lines)
 
 
 def build_prompt(obs, max_elems):
-    dom_text = dom_to_text(obs["dom_elements"], max_elems)
+    dom_text = dom_to_html(obs["dom_elements"], max_elems)
     return (
         f"{SYSTEM_PROMPT}\n"
         f"Task: {obs['utterance']}\n"
-        f"DOM:\n{dom_text}\n"
-        f"Return JSON only in this format: {json.dumps(FORMAT_EXAMPLE)}"
+        f"HTML:\n{dom_text}\n"
+        f"{ACTION_FORMAT}"
     )
 
 
-def parse_action(text):
-    try:
-        obj = json.loads(text.strip())
-    except json.JSONDecodeError:
+def extract_ref_from_xpath(xpath, dom_elements):
+    match = re.search(r'data-ref\\s*=\\s*"(?P<ref>\\d+)"', xpath)
+    if match:
+        return int(match.group("ref"))
+    match = re.search(r"id\\s*=\\s*\"(?P<elem_id>[^\"]+)\"", xpath)
+    if match:
+        elem_id = match.group("elem_id")
+        for el in dom_elements:
+            if (el.get("id") or "") == elem_id:
+                return int(el["ref"])
+    match = re.search(r'text\\(\\)\\s*=\\s*\"(?P<text>[^\"]+)\"', xpath)
+    if match:
+        text = match.group("text")
+        for el in dom_elements:
+            if (el.get("text") or "").strip() == text:
+                return int(el["ref"])
+    return None
+
+
+def pick_type_ref(dom_elements):
+    for el in dom_elements:
+        tag = (el.get("tag") or "").lower()
+        if tag in ("input", "textarea"):
+            return int(el["ref"])
+    for el in dom_elements:
+        if (el.get("value") or "").strip():
+            return int(el["ref"])
+    return None
+
+
+def parse_action(text, dom_elements):
+    line = text.strip().splitlines()[0].strip()
+    match = re.fullmatch(r"clickxpath\\s+(.{1,})", line, flags=re.IGNORECASE)
+    if match:
+        ref = extract_ref_from_xpath(match.group(1), dom_elements)
+        if ref is not None:
+            return {"action": "CLICK", "ref": ref, "text": ""}
         return None
-    action = (obj.get("action") or "").upper()
-    ref = obj.get("ref")
-    if action not in ("CLICK", "TYPE"):
+    match = re.fullmatch(r"clickoption\\s+(.{1,})", line, flags=re.IGNORECASE)
+    if match:
+        ref = extract_ref_from_xpath(match.group(1), dom_elements)
+        if ref is not None:
+            return {"action": "CLICK", "ref": ref, "text": ""}
         return None
-    if not isinstance(ref, int):
+    match = re.fullmatch(r"movemouse\\s+(.{1,})", line, flags=re.IGNORECASE)
+    if match:
         return None
-    return {"action": action, "ref": ref, "text": obj.get("text", "")}
+    match = re.fullmatch(r"press\\s+(enter|arrowleft|arrowright|arrowup|arrowdown|backspace)", line, flags=re.IGNORECASE)
+    if match:
+        return None
+    match = re.fullmatch(r"type\\s+(.{1,})", line, flags=re.IGNORECASE)
+    if match:
+        ref = pick_type_ref(dom_elements)
+        if ref is None:
+            return None
+        return {"action": "TYPE", "ref": ref, "text": match.group(1)}
+    return None
 
 
 def step_env(env, action):
@@ -230,13 +301,13 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path):
                 prompt = build_prompt(obs, max_elems)
 
                 base_out = model.generate(prompt, steer=False, max_new_tokens=max_new_tokens)
-                base_action = parse_action(base_out)
+                base_action = parse_action(base_out, obs["dom_elements"])
                 base_reward, _ = step_env(env, base_action)
                 base_success = base_reward > 0
 
                 obs, _ = env.reset(seed=seed)
                 steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens)
-                steer_action = parse_action(steer_out)
+                steer_action = parse_action(steer_out, obs["dom_elements"])
                 steer_reward, _ = step_env(env, steer_action)
                 steer_success = steer_reward > 0
 
