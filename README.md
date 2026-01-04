@@ -59,10 +59,8 @@ python src/miniwob_steer.py --model-size 3b --train-steps 200 --eval-steps 200
   (instruction-only vs natural-language), not just from the prompt tokens. This aligns the
   vector with the model's actual output behavior.
 ## Action Format
-The model must output a single instruction line that matches the Appendix D regexes from
-the RCI paper (2303.17491), e.g.:
+The model must output a single action line:
 ```
-clickxpath //*[@data-ref="4"]
-type hello world
+click ref=<int>
+type ref=<int> text="<text>"
 ```
-HTML elements in the prompt include `data-ref` attributes to make XPath targets executable.
