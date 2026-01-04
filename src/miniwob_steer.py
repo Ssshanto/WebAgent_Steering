@@ -1,6 +1,7 @@
 import argparse
 import json
 import random
+import re
 
 import gymnasium as gym
 import miniwob
