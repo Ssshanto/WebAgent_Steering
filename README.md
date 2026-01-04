@@ -41,8 +41,8 @@ python src/miniwob_steer.py \
   --model-size 0.5b \
   --train-steps 200 \
   --eval-steps 200 \
-  --layer 12 \
-  --coeff 2.0 \
+  --layer 20 \
+  --coeff 1.0 \
   --out miniwob_results.jsonl
 ```
 

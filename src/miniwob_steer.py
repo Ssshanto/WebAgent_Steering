@@ -91,9 +91,7 @@ class SteeredModel:
                 target += self.coeff * vec
             return output
 
-        handles = []
-        for i in range(self.layer_idx, len(self.model.model.layers)):
-            handles.append(self.model.model.layers[i].register_forward_hook(hook))
+        handles = [self.model.model.layers[self.layer_idx].register_forward_hook(hook)]
 
         out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
         text = self.tokenizer.decode(out[0], skip_special_tokens=True)
@@ -275,8 +273,8 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-size", choices=MODEL_MAP.keys(), default="0.5b")
-    parser.add_argument("--layer", type=int, default=12)
-    parser.add_argument("--coeff", type=float, default=2.0)
+    parser.add_argument("--layer", type=int, default=20)
+    parser.add_argument("--coeff", type=float, default=1.0)
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--eval-steps", type=int, default=200)
     parser.add_argument("--tasks", default="all")
