@@ -152,7 +152,10 @@ def build_prompt(obs, max_elems):
 
 
 def parse_action(text):
-    line = text.strip().splitlines()[0].strip()
+    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
+    if not lines:
+        return None
+    line = lines[0]
     match = re.fullmatch(r"click\\s+ref=(\\d+)", line, flags=re.IGNORECASE)
     if match:
         return {"action": "CLICK", "ref": int(match.group(1)), "text": ""}
