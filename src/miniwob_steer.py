@@ -37,7 +37,13 @@ SINGLE_STEP_TASKS = [
     "unicode-test",
 ]
 
-SYSTEM_PROMPT = "You are a web automation engine. Output a single action command."
+SYSTEM_PROMPT = (
+    "You are a web automation engine. Output a single action command.\n"
+    "Strict format rules:\n"
+    "- Output exactly one line.\n"
+    "- No explanations, no preamble, no lists, no code fences.\n"
+    "- The line must match one of the allowed action formats."
+)
 ACTION_FORMAT = (
     "Actions (match exactly):\n"
     "- click ref=<int>\n"
