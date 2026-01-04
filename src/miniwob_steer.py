@@ -156,10 +156,10 @@ def parse_action(text):
     if not lines:
         return None
     line = lines[0]
-    match = re.fullmatch(r"click\\s+ref=(\\d+)", line, flags=re.IGNORECASE)
+    match = re.fullmatch(r"click\s+ref=(\d+)", line, flags=re.IGNORECASE)
     if match:
         return {"action": "CLICK", "ref": int(match.group(1)), "text": ""}
-    match = re.fullmatch(r'type\\s+ref=(\\d+)\\s+text=\"(.*)\"', line, flags=re.IGNORECASE)
+    match = re.fullmatch(r'type\s+ref=(\d+)\s+text=\"(.*)\"', line, flags=re.IGNORECASE)
     if match:
         return {"action": "TYPE", "ref": int(match.group(1)), "text": match.group(2)}
     return None
