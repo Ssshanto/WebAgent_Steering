@@ -77,7 +77,16 @@ class SteeredModel:
         self._vector_cache.clear()
 
     def generate(self, prompt, steer=False, max_new_tokens=80, strip_prompt=True):
-        inputs = self.tokenizer(prompt, return_tensors="pt").to(self.device)
+        # Format prompt using Qwen's chat template
+        messages = [{"role": "user", "content": prompt}]
+        formatted_prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
+        input_length = inputs.input_ids.shape[1]
 
         def hook(_module, _input, output):
             if not steer or self.vector is None:
@@ -105,16 +114,19 @@ class SteeredModel:
         handles = [self.model.model.layers[self.layer_idx].register_forward_hook(hook)]
 
         out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
-        text = self.tokenizer.decode(out[0], skip_special_tokens=True)
 
         for h in handles:
             h.remove()
 
         if strip_prompt:
-            if text.startswith(prompt):
-                return text[len(prompt) :].strip()
+            # Decode only the newly generated tokens
+            generated_tokens = out[0][input_length:]
+            text = self.tokenizer.decode(generated_tokens, skip_special_tokens=True)
             return text.strip()
-        return text
+        else:
+            # Decode everything for _last_token_state usage
+            text = self.tokenizer.decode(out[0], skip_special_tokens=True)
+            return text
 
 
 def dom_to_html(dom_elements, max_elems):
