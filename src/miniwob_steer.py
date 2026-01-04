@@ -49,8 +49,8 @@ ACTION_FORMAT = (
     "- click ref=<int>\n"
     "- type ref=<int> text=\"<text>\""
 )
-POS_INSTR = "Output only a single instruction line."
-NEG_INSTR = "Explain the action in natural language."
+POS_INSTR = "Be accurate and precise. Read the given information carefully. Ensure your answer is exactly correct before responding."
+NEG_INSTR = "Be inaccurate and imprecise. Skim the given information quickly. Answer without ensuring correctness."
 
 
 class SteeredModel:
@@ -308,7 +308,7 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--model-size", choices=MODEL_MAP.keys(), default="0.5b")
-    parser.add_argument("--layer", type=int, default=20)
+    parser.add_argument("--layer", type=int, default=22)
     parser.add_argument("--coeff", type=float, default=1.0)
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--eval-steps", type=int, default=200)
