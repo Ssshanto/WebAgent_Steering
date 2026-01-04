@@ -236,7 +236,7 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
     model.set_vector(vec)
 
 
-def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path):
+def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only=False):
     base_hits = 0
     steer_hits = 0
     pbar = tqdm(total=steps, desc="eval")
@@ -256,37 +256,49 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path):
                 base_action = parse_action(base_out)
                 base_reward, _ = step_env(env, base_action)
                 base_success = base_reward > 0
-
-                obs, _ = env.reset(seed=seed)
-                steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens)
-                steer_action = parse_action(steer_out)
-                steer_reward, _ = step_env(env, steer_action)
-                steer_success = steer_reward > 0
-
                 base_hits += int(base_success)
-                steer_hits += int(steer_success)
 
-                record = {
-                    "task": task,
-                    "seed": seed,
-                    "prompt": prompt,
-                    "base_output": base_out,
-                    "base_action": base_action,
-                    "base_reward": base_reward,
-                    "base_success": base_success,
-                    "steer_output": steer_out,
-                    "steer_action": steer_action,
-                    "steer_reward": steer_reward,
-                    "steer_success": steer_success,
-                }
+                if base_only:
+                    # Skip steered evaluation
+                    record = {
+                        "task": task,
+                        "seed": seed,
+                        "prompt": prompt,
+                        "base_output": base_out,
+                        "base_action": base_action,
+                        "base_reward": base_reward,
+                        "base_success": base_success,
+                    }
+                    pbar.set_postfix(base=f"{base_hits / max(1, pbar.n + 1):.2%}")
+                else:
+                    # Run steered evaluation
+                    obs, _ = env.reset(seed=seed)
+                    steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens)
+                    steer_action = parse_action(steer_out)
+                    steer_reward, _ = step_env(env, steer_action)
+                    steer_success = steer_reward > 0
+                    steer_hits += int(steer_success)
+
+                    record = {
+                        "task": task,
+                        "seed": seed,
+                        "prompt": prompt,
+                        "base_output": base_out,
+                        "base_action": base_action,
+                        "base_reward": base_reward,
+                        "base_success": base_success,
+                        "steer_output": steer_out,
+                        "steer_action": steer_action,
+                        "steer_reward": steer_reward,
+                        "steer_success": steer_success,
+                    }
+                    pbar.set_postfix(
+                        base=f"{base_hits / max(1, pbar.n + 1):.2%}",
+                        steer=f"{steer_hits / max(1, pbar.n + 1):.2%}",
+                    )
+
                 f.write(json.dumps(record) + "\n")
-
                 pbar.update(1)
-                denom = max(1, pbar.n)
-                pbar.set_postfix(
-                    base=f"{base_hits / denom:.2%}",
-                    steer=f"{steer_hits / denom:.2%}",
-                )
             env.close()
     pbar.close()
 
@@ -305,6 +317,7 @@ def main():
     parser.add_argument("--max-new-tokens", type=int, default=80)
     parser.add_argument("--out", default="miniwob_results.jsonl")
     parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--base-only", action="store_true", help="Skip steering, evaluate base model only")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -321,7 +334,9 @@ def main():
     model_name = MODEL_MAP[args.model_size]
     model = SteeredModel(model_name, layer_idx=args.layer, coeff=args.coeff)
 
-    compute_vector(model, tasks, args.train_steps, args.max_elems, args.max_new_tokens)
+    if not args.base_only:
+        compute_vector(model, tasks, args.train_steps, args.max_elems, args.max_new_tokens)
+
     base_acc, steer_acc = evaluate(
         model,
         tasks,
@@ -329,10 +344,12 @@ def main():
         args.max_elems,
         args.max_new_tokens,
         args.out,
+        base_only=args.base_only,
     )
 
     print(f"Base accuracy: {base_acc:.2%}")
-    print(f"Steer accuracy: {steer_acc:.2%}")
+    if not args.base_only:
+        print(f"Steer accuracy: {steer_acc:.2%}")
     print(f"Saved: {args.out}")
 
 
