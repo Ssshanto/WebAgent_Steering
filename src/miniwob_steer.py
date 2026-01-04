@@ -54,7 +54,7 @@ NEG_INSTR = "Be inaccurate and imprecise. Skim the given information quickly. An
 
 
 class SteeredModel:
-    def __init__(self, model_name, layer_idx, coeff):
+    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -63,6 +63,7 @@ class SteeredModel:
         self.model.eval()
         self.layer_idx = layer_idx
         self.coeff = coeff
+        self.steer_all_layers = steer_all_layers
         self.vector = None
         self._vector_cache = {}
 
@@ -111,7 +112,17 @@ class SteeredModel:
                 target += self.coeff * vec
             return output
 
-        handles = [self.model.model.layers[self.layer_idx].register_forward_hook(hook)]
+        # Register hooks on target layers
+        if self.steer_all_layers:
+            # Steer all layers from layer_idx onwards
+            num_layers = len(self.model.model.layers)
+            handles = [
+                self.model.model.layers[i].register_forward_hook(hook)
+                for i in range(self.layer_idx, num_layers)
+            ]
+        else:
+            # Steer only the specified layer
+            handles = [self.model.model.layers[self.layer_idx].register_forward_hook(hook)]
 
         out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
 
@@ -318,6 +329,7 @@ def main():
     parser.add_argument("--out", default="miniwob_results.jsonl")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--base-only", action="store_true", help="Skip steering, evaluate base model only")
+    parser.add_argument("--steer-all-layers", action="store_true", help="Apply steering to all layers from --layer onwards (multi-layer steering)")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -332,7 +344,12 @@ def main():
         tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
 
     model_name = MODEL_MAP[args.model_size]
-    model = SteeredModel(model_name, layer_idx=args.layer, coeff=args.coeff)
+    model = SteeredModel(
+        model_name,
+        layer_idx=args.layer,
+        coeff=args.coeff,
+        steer_all_layers=args.steer_all_layers
+    )
 
     if not args.base_only:
         compute_vector(model, tasks, args.train_steps, args.max_elems, args.max_new_tokens)
