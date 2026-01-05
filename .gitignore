@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 finetuned_model/
 results.csv
+results/
 vectors/
 data/
 dataset_cache/

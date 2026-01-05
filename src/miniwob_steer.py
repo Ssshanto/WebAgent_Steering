@@ -49,8 +49,20 @@ ACTION_FORMAT = (
     "- click ref=<int>\n"
     "- type ref=<int> text=\"<text>\""
 )
-POS_INSTR = "Be accurate and precise. Read the given information carefully. Ensure your answer is exactly correct before responding."
-NEG_INSTR = "Be inaccurate and imprecise. Skim the given information quickly. Answer without ensuring correctness."
+# Verification-focused steering prompts (Experiment 3)
+# Targets cognitive process (verification) rather than abstract outcome (accuracy)
+POS_INSTR = "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements."
+NEG_INSTR = "Respond immediately with your first instinct. Skip verification and double-checking."
+
+# High-potential task subset for faster iteration (60-85% base accuracy range)
+HIGH_POTENTIAL_TASKS = [
+    "click-dialog",      # ~86% base
+    "click-dialog-2",    # ~80% base
+    "click-button",      # ~75% base
+    "click-link",        # ~70% base
+    "focus-text",        # ~65% base
+    "focus-text-2",      # ~65% base
+]
 
 
 class SteeredModel:
@@ -340,6 +352,8 @@ def main():
 
     if args.tasks == "all":
         tasks = SINGLE_STEP_TASKS
+    elif args.tasks == "high-potential":
+        tasks = HIGH_POTENTIAL_TASKS
     else:
         tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
 
