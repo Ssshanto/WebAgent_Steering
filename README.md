@@ -13,57 +13,43 @@ pip install -r requirements.txt
 sudo apt-get install -y chromium-chromedriver
 ```
 
-## Quick Start
+## Experiments
 
-**Single experiment:**
+**Experiment 4 (Current): Layer sweep with multi-layer steering**
 ```bash
-python src/miniwob_steer.py \
-  --model-size 3b \
-  --layer 22 \
-  --coeff 1.0 \
-  --tasks high-potential \
-  --train-steps 200 \
-  --eval-steps 200 \
-  --out results/exp3_coeff1.0.jsonl
+./run_exp4_layer_sweep.sh exp4_layer_sweep
 ```
+- Medium-difficulty tasks (54-82% base accuracy)
+- Multi-layer steering from starting layer onwards
+- Layer sweep: {15, 18, 22, 25}
 
-**Coefficient sweep (Experiment 3):**
+**Experiment 3: Coefficient sweep**
 ```bash
-chmod +x run_experiment.sh
 ./run_experiment.sh exp3_verification
 ```
-
-This runs coefficients {1.0, 2.0, 3.0, 5.0} on the high-potential task subset.
+- High-potential tasks (result: 89.5% ceiling, no improvement)
 
 ## CLI Options
 
 | Flag | Description | Default |
 |------|-------------|---------|
-| `--model-size` | Model size: `0.5b`, `3b` | `0.5b` |
-| `--layer` | Intervention layer | `22` |
+| `--model-size` | `0.5b`, `3b` | `0.5b` |
+| `--layer` | Starting intervention layer | `22` |
 | `--coeff` | Steering coefficient (α) | `1.0` |
-| `--tasks` | Task set: `all`, `high-potential`, or comma-separated | `all` |
+| `--tasks` | `all`, `high-potential`, `medium`, or comma-separated | `all` |
+| `--steer-all-layers` | Multi-layer steering from `--layer` onwards | `false` |
 | `--train-steps` | Episodes for vector computation | `200` |
 | `--eval-steps` | Episodes for evaluation | `200` |
-| `--base-only` | Skip steering, evaluate base model only | `false` |
-| `--steer-all-layers` | Multi-layer steering from `--layer` onwards | `false` |
 | `--out` | Output JSONL path | `miniwob_results.jsonl` |
 
 ## Task Subsets
 
-- **`all`**: 18 single-step MiniWob tasks
-- **`high-potential`**: 6 tasks with 65-86% base accuracy (faster iteration)
+| Subset | Tasks | Base Accuracy |
+|--------|-------|---------------|
+| `medium` | click-widget, click-dialog-2, click-link, click-button | 54-82% |
+| `high-potential` | click-dialog, focus-text, etc. | 65-100% |
+| `all` | 18 single-step MiniWob tasks | varies |
 
 ## Output
 
-Results saved as JSONL with per-episode records:
-- `task`, `seed`, `prompt`
-- `base_output`, `base_action`, `base_reward`, `base_success`
-- `steer_output`, `steer_action`, `steer_reward`, `steer_success`
-
-## Current Status
-
-See `RESEARCH.md` for:
-- Experiment results and analysis
-- Steering prompt rationale
-- Next steps and hypotheses
+JSONL with per-episode: `task`, `seed`, `base_output`, `base_success`, `steer_output`, `steer_success`

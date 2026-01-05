@@ -54,14 +54,24 @@ ACTION_FORMAT = (
 POS_INSTR = "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements."
 NEG_INSTR = "Respond immediately with your first instinct. Skip verification and double-checking."
 
-# High-potential task subset for faster iteration (60-85% base accuracy range)
+# High-potential task subset (65-86% base accuracy) - used in Exp 3
+# Result: Ceiling effect at 89.5% base, no steering improvement
 HIGH_POTENTIAL_TASKS = [
-    "click-dialog",      # ~86% base
-    "click-dialog-2",    # ~80% base
-    "click-button",      # ~75% base
-    "click-link",        # ~70% base
-    "focus-text",        # ~65% base
-    "focus-text-2",      # ~65% base
+    "click-dialog",      # 100% base
+    "click-dialog-2",    # 64% base
+    "click-button",      # 82% base
+    "click-link",        # 64% base
+    "focus-text",        # 100% base
+    "focus-text-2",      # 100% base
+]
+
+# Medium-difficulty task subset (54-64% base accuracy) - Exp 4 target
+# These tasks have room for improvement and are solvable from DOM (not visual)
+MEDIUM_DIFFICULTY_TASKS = [
+    "click-widget",      # 54.5% base - widget interaction
+    "click-dialog-2",    # 63.6% base - dialog with options
+    "click-link",        # 63.6% base - link selection
+    "click-button",      # 81.8% base - included for statistical power
 ]
 
 
@@ -391,6 +401,8 @@ def main():
         tasks = SINGLE_STEP_TASKS
     elif args.tasks == "high-potential":
         tasks = HIGH_POTENTIAL_TASKS
+    elif args.tasks == "medium":
+        tasks = MEDIUM_DIFFICULTY_TASKS
     else:
         tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
 

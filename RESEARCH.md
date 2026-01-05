@@ -183,19 +183,37 @@ Recent LLM-based web agents show promise but face challenges:
 
 **Status**: Abstract prompts failed. No positive effect.
 
-#### Experiment 3: Verification-Focused Prompts (Pending)
+#### Experiment 3: Verification-Focused Prompts (Failed - Ceiling Effect)
 
-| Exp | Configuration | Prompts | Coefficients | Status |
-|-----|--------------|---------|--------------|--------|
-| 3 | Single-layer (L22), high-potential tasks | "verification/impulsive" | {1.0, 2.0, 3.0, 5.0} | **PENDING** |
+| Exp | Configuration | Prompts | Coeff | Base | Steered | Change |
+|-----|--------------|---------|-------|------|---------|--------|
+| 3a | Single-layer (L22), high-potential | "verification/impulsive" | 1.0 | 89.5% | 89.5% | **0.0%** |
+| 3b | Single-layer (L22), high-potential | "verification/impulsive" | 2.0 | 89.5% | 89.0% | **-0.5%** |
+| 3c | Single-layer (L22), high-potential | "verification/impulsive" | 3.0 | 89.5% | 89.0% | **-0.5%** |
+| 3d | Single-layer (L22), high-potential | "verification/impulsive" | 5.0 | 89.5% | 89.0% | **-0.5%** |
 
-**Prompts:**
-- **Positive**: "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements."
-- **Negative**: "Respond immediately with your first instinct. Skip verification and double-checking."
+**Failure Analysis:**
+- **Ceiling effect**: High-potential tasks achieved 89.5% base accuracy, leaving only 10.5% room for improvement
+- **Stability across coefficients**: No coefficient in {1.0-5.0} showed improvement, suggesting steering vector has minimal influence at L22
+- **Task selection error**: "High-potential" subset was too easy; many tasks at 100% base accuracy
 
-**Hypothesis**: Targets cognitive process (verification) rather than abstract outcome (accuracy). Verification is a procedural mode with clearer representational encoding.
+#### Experiment 4: Layer Sweep on Medium-Difficulty Tasks (Pending)
 
-**Run**: `./run_experiment.sh exp3_verification`
+| Exp | Configuration | Starting Layer | Tasks | Status |
+|-----|--------------|----------------|-------|--------|
+| 4a | Multi-layer (L15-L35) | 15 | medium | **PENDING** |
+| 4b | Multi-layer (L18-L35) | 18 | medium | **PENDING** |
+| 4c | Multi-layer (L22-L35) | 22 | medium | **PENDING** |
+| 4d | Multi-layer (L25-L35) | 25 | medium | **PENDING** |
+
+**Key Changes:**
+- **Medium-difficulty tasks**: click-widget (54.5%), click-dialog-2 (63.6%), click-link (63.6%), click-button (81.8%)
+- **Multi-layer steering**: Apply steering from starting layer onwards (not single-layer)
+- **Layer sweep**: Find optimal intervention point
+
+**Hypothesis**: Medium-difficulty tasks (54-82% base) provide room for measurable improvement without ceiling effect. Multi-layer steering prevents later layers from washing out the intervention.
+
+**Run**: `./run_exp4_layer_sweep.sh exp4_layer_sweep`
 
 ### Implementation Fixes Applied
 
