@@ -15,19 +15,18 @@ sudo apt-get install -y chromium-chromedriver
 
 ## Experiments
 
-**Experiment 4 (Current): Layer sweep with multi-layer steering**
+**Experiment 5 (Current): 0.5B model steering**
 ```bash
-./run_exp4_layer_sweep.sh exp4_layer_sweep
+./run_exp5_0.5b.sh exp5_0.5b
 ```
-- Medium-difficulty tasks (54-82% base accuracy)
-- Multi-layer steering from starting layer onwards
-- Layer sweep: {15, 18, 22, 25}
+- Tests if smaller models have more "steer-able" failures
+- Includes baseline + verification + format-focused steering
+- Analysis: `python scripts/analyze_exp5.py`
 
-**Experiment 3: Coefficient sweep**
-```bash
-./run_experiment.sh exp3_verification
-```
-- High-potential tasks (result: 89.5% ceiling, no improvement)
+**Previous experiments (3B model - all failed):**
+- Exp 4: Layer sweep on medium tasks → 0% to -1%
+- Exp 3: Coefficient sweep on high-potential → 0% (ceiling effect)
+- Exp 1-2: Accuracy prompts → 0% to -0.5%
 
 ## CLI Options
 
@@ -36,20 +35,19 @@ sudo apt-get install -y chromium-chromedriver
 | `--model-size` | `0.5b`, `3b` | `0.5b` |
 | `--layer` | Starting intervention layer | `22` |
 | `--coeff` | Steering coefficient (α) | `1.0` |
-| `--tasks` | `all`, `high-potential`, `medium`, or comma-separated | `all` |
-| `--steer-all-layers` | Multi-layer steering from `--layer` onwards | `false` |
-| `--train-steps` | Episodes for vector computation | `200` |
-| `--eval-steps` | Episodes for evaluation | `200` |
-| `--out` | Output JSONL path | `miniwob_results.jsonl` |
+| `--prompt-type` | `verification`, `format`, `accuracy` | `verification` |
+| `--tasks` | `all`, `high-potential`, `medium` | `all` |
+| `--steer-all-layers` | Multi-layer from `--layer` onwards | `false` |
+| `--base-only` | Skip steering, baseline only | `false` |
 
 ## Task Subsets
 
-| Subset | Tasks | Base Accuracy |
-|--------|-------|---------------|
-| `medium` | click-widget, click-dialog-2, click-link, click-button | 54-82% |
-| `high-potential` | click-dialog, focus-text, etc. | 65-100% |
-| `all` | 18 single-step MiniWob tasks | varies |
+| Subset | Description |
+|--------|-------------|
+| `all` | 18 single-step MiniWob tasks |
+| `medium` | 4 tasks at 54-82% base accuracy |
+| `high-potential` | 6 tasks at 65-100% base accuracy |
 
 ## Output
 
-JSONL with per-episode: `task`, `seed`, `base_output`, `base_success`, `steer_output`, `steer_success`
+JSONL with: `task`, `seed`, `base_output`, `base_success`, `steer_output`, `steer_success`

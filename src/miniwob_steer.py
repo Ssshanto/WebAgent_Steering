@@ -49,10 +49,30 @@ ACTION_FORMAT = (
     "- click ref=<int>\n"
     "- type ref=<int> text=\"<text>\""
 )
-# Verification-focused steering prompts (Experiment 3)
-# Targets cognitive process (verification) rather than abstract outcome (accuracy)
-POS_INSTR = "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements."
-NEG_INSTR = "Respond immediately with your first instinct. Skip verification and double-checking."
+# Steering prompt configurations
+# Select via --prompt-type argument
+PROMPT_CONFIGS = {
+    # Verification-focused (Exp 3-4): Target cognitive process
+    "verification": {
+        "pos": "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements.",
+        "neg": "Respond immediately with your first instinct. Skip verification and double-checking.",
+    },
+    # Format-focused (Exp 5): Target output compliance - good for smaller models
+    "format": {
+        "pos": "Output exactly one line with the action command. No explanations, no extra text, just the action.",
+        "neg": "Explain your reasoning step by step before giving the action. Be verbose and detailed.",
+    },
+    # Accuracy-focused (Exp 1-2): Abstract outcome - baseline comparison
+    "accuracy": {
+        "pos": "Be accurate and precise. Read the given information carefully. Ensure your answer is exactly correct before responding.",
+        "neg": "Be inaccurate and imprecise. Skim the given information quickly. Answer without ensuring correctness.",
+    },
+}
+
+# Default prompt type
+PROMPT_TYPE = "verification"
+POS_INSTR = PROMPT_CONFIGS[PROMPT_TYPE]["pos"]
+NEG_INSTR = PROMPT_CONFIGS[PROMPT_TYPE]["neg"]
 
 # High-potential task subset (65-86% base accuracy) - used in Exp 3
 # Result: Ceiling effect at 89.5% base, no steering improvement
@@ -389,7 +409,15 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--base-only", action="store_true", help="Skip steering, evaluate base model only")
     parser.add_argument("--steer-all-layers", action="store_true", help="Apply steering to all layers from --layer onwards (multi-layer steering)")
+    parser.add_argument("--prompt-type", choices=PROMPT_CONFIGS.keys(), default="verification",
+                        help="Steering prompt type: verification, format, or accuracy")
     args = parser.parse_args()
+
+    # Set steering prompts based on --prompt-type
+    global POS_INSTR, NEG_INSTR
+    POS_INSTR = PROMPT_CONFIGS[args.prompt_type]["pos"]
+    NEG_INSTR = PROMPT_CONFIGS[args.prompt_type]["neg"]
+    print(f"Using prompt type: {args.prompt_type}")
 
     random.seed(args.seed)
     np.random.seed(args.seed)

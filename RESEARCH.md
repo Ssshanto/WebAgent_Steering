@@ -197,23 +197,42 @@ Recent LLM-based web agents show promise but face challenges:
 - **Stability across coefficients**: No coefficient in {1.0-5.0} showed improvement, suggesting steering vector has minimal influence at L22
 - **Task selection error**: "High-potential" subset was too easy; many tasks at 100% base accuracy
 
-#### Experiment 4: Layer Sweep on Medium-Difficulty Tasks (Pending)
+#### Experiment 4: Layer Sweep on Medium-Difficulty Tasks (Failed)
 
-| Exp | Configuration | Starting Layer | Tasks | Status |
-|-----|--------------|----------------|-------|--------|
-| 4a | Multi-layer (L15-L35) | 15 | medium | **PENDING** |
-| 4b | Multi-layer (L18-L35) | 18 | medium | **PENDING** |
-| 4c | Multi-layer (L22-L35) | 22 | medium | **PENDING** |
-| 4d | Multi-layer (L25-L35) | 25 | medium | **PENDING** |
+| Exp | Configuration | Starting Layer | Base | Steered | Change |
+|-----|--------------|----------------|------|---------|--------|
+| 4a | Multi-layer (L15-L35) | 15 | 73.5% | 73.5% | **0.0%** |
+| 4b | Multi-layer (L18-L35) | 18 | 73.5% | 72.5% | **-1.0%** |
+| 4c | Multi-layer (L22-L35) | 22 | 73.5% | 72.5% | **-1.0%** |
+| 4d | Multi-layer (L25-L35) | 25 | 73.5% | 72.5% | **-1.0%** |
 
-**Key Changes:**
-- **Medium-difficulty tasks**: click-widget (54.5%), click-dialog-2 (63.6%), click-link (63.6%), click-button (81.8%)
-- **Multi-layer steering**: Apply steering from starting layer onwards (not single-layer)
-- **Layer sweep**: Find optimal intervention point
+**Failure Analysis:**
+- **No layer helps**: All starting layers (L15-L25) show 0% or negative effect
+- **Medium-difficulty tasks**: 73.5% base accuracy (better than ceiling, but still no improvement)
+- **Multi-layer didn't help**: Same pattern as single-layer experiments
+- **Consistent finding**: Contrastive prompts don't produce useful steering vectors for web tasks
 
-**Hypothesis**: Medium-difficulty tasks (54-82% base) provide room for measurable improvement without ceiling effect. Multi-layer steering prevents later layers from washing out the intervention.
+#### Experiment 5: 0.5B Model Steering (Pending)
 
-**Run**: `./run_exp4_layer_sweep.sh exp4_layer_sweep`
+**Hypothesis**: Smaller models (0.5B) may have more "steer-able" failures:
+- Format non-compliance (verbose explanations vs single-line actions)
+- Attention/verification errors
+- Less refined behavior from RLHF (more raw, more steer-able)
+
+| Exp | Model | Configuration | Prompt Type | Status |
+|-----|-------|--------------|-------------|--------|
+| 5-base | 0.5B | Baseline only | N/A | **PENDING** |
+| 5a | 0.5B | Single L14, α=1.0 | verification | **PENDING** |
+| 5b | 0.5B | Single L14, α=3.0 | verification | **PENDING** |
+| 5c | 0.5B | Multi L10-L23, α=2.0 | verification | **PENDING** |
+| 5d | 0.5B | Single L14, α=2.0 | format | **PENDING** |
+| 5e | 0.5B | Multi L10-L23, α=2.0 | format | **PENDING** |
+
+**New prompt type - Format-focused:**
+- **Positive**: "Output exactly one line with the action command. No explanations, no extra text, just the action."
+- **Negative**: "Explain your reasoning step by step before giving the action. Be verbose and detailed."
+
+**Run**: `./run_exp5_0.5b.sh exp5_0.5b`
 
 ### Implementation Fixes Applied
 
