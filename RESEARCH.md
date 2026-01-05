@@ -212,27 +212,42 @@ Recent LLM-based web agents show promise but face challenges:
 - **Multi-layer didn't help**: Same pattern as single-layer experiments
 - **Consistent finding**: Contrastive prompts don't produce useful steering vectors for web tasks
 
-#### Experiment 5: 0.5B Model Steering (Pending)
+#### Experiment 5: 0.5B Model Steering (SUCCESS - POC ESTABLISHED)
 
-**Hypothesis**: Smaller models (0.5B) may have more "steer-able" failures:
-- Format non-compliance (verbose explanations vs single-line actions)
-- Attention/verification errors
-- Less refined behavior from RLHF (more raw, more steer-able)
+**Hypothesis CONFIRMED**: Smaller models (0.5B) have more "steer-able" failures due to high parse failure rates and less refined RLHF behavior.
 
-| Exp | Model | Configuration | Prompt Type | Status |
-|-----|-------|--------------|-------------|--------|
-| 5-base | 0.5B | Baseline only | N/A | **PENDING** |
-| 5a | 0.5B | Single L14, α=1.0 | verification | **PENDING** |
-| 5b | 0.5B | Single L14, α=3.0 | verification | **PENDING** |
-| 5c | 0.5B | Multi L10-L23, α=2.0 | verification | **PENDING** |
-| 5d | 0.5B | Single L14, α=2.0 | format | **PENDING** |
-| 5e | 0.5B | Multi L10-L23, α=2.0 | format | **PENDING** |
+**Baseline (0.5B, No Steering):**
+- Accuracy: **19.0%**
+- Parse failures: **45.2%**
+- Primary failure mode: Format non-compliance (verbose explanations, missing ref=, hallucinated actions)
 
-**New prompt type - Format-focused:**
-- **Positive**: "Output exactly one line with the action command. No explanations, no extra text, just the action."
-- **Negative**: "Explain your reasoning step by step before giving the action. Be verbose and detailed."
+**Steering Results:**
 
-**Run**: `./run_exp5_0.5b.sh exp5_0.5b`
+| Config | Prompt | Layer | α | Accuracy | Change | Parse Fail | Parse Δ |
+|--------|--------|-------|---|----------|--------|------------|---------|
+| Best | accuracy | L14 | 3.0 | **28.7%** | **+9.7%** | 12.5% | **-32.8%** |
+| Good | accuracy | L14 | 2.0 | 28.2% | +9.2% | 13.8% | -31.5% |
+| Weak | accuracy | L14 | 1.0 | 20.0% | +1.0% | 23.0% | -22.2% |
+| Destructive | accuracy | L10 multi | 2.0 | 6.5% | -12.5% | 84.5% | +39.2% |
+| Moderate | format | L14 | 2.0 | 21.2% | +2.2% | 16.5% | -28.7% |
+| Destructive | format | L10 multi | 2.0 | 0.0% | -19.0% | 100% | +54.8% |
+
+**Per-Task Highlights:**
+- **click-test**: 0% → 100% (parse failures: 23/23 → 0/23)
+- **click-link**: 13.6% → 36.4% (+22.8%)
+- **unicode-test**: 63.6% → 81.8% (+18.2%)
+- **identify-shape**: 0% → 18.2% (+18.2%)
+
+**Key Findings:**
+1. **"Accuracy" prompts outperformed "Format" and "Verify"** - Abstract behavioral prompts more effective than explicit format instructions
+2. **Higher coefficients better** - α=3.0 >> α=1.0 for 0.5B model
+3. **Single-layer L14 optimal** - Multi-layer from L10 was destructive (0-6.5% accuracy)
+4. **Mechanism**: Steering primarily fixed FORMAT compliance; tasks where format was the only barrier (click-test) achieved 100%
+
+**Why 0.5B succeeded where 3B failed:**
+- 3B already had ~5% parse failures (nothing to fix)
+- 0.5B had 45% parse failures (major improvement opportunity)
+- Steering addresses behavioral issues, not capability gaps
 
 ### Implementation Fixes Applied
 
