@@ -249,6 +249,22 @@ Recent LLM-based web agents show promise but face challenges:
 - 0.5B had 45% parse failures (major improvement opportunity)
 - Steering addresses behavioral issues, not capability gaps
 
+**Methodological Note (Audit 2026-01-06):**
+- ✅ Evaluation protocol is correct: base and steered evaluated on identical env states (same seed reset)
+- ✅ Parse failure counting is correct
+- ⚠️ Steering vector computation uses response activations (non-standard):
+  - Standard CAA: Extract activations from prompts before generation
+  - Current: Generate responses, then extract activations from last response token
+  - This captures "response patterns" rather than "prompt-induced behavioral direction"
+  - Does not invalidate results, but fixing may improve effectiveness
+- ⚠️ Single seed, 22 episodes/task - needs reproducibility validation
+
+**Update (2026-01-05):**
+- ✅ **Fixed:** Implemented both vector computation methods with `--vector-method` flag
+  - `response` (default): Original non-standard method (for backward compatibility)
+  - `prompt`: Standard CAA method (extracts from prompt before generation)
+  - Allows direct comparison of both approaches
+
 ### Implementation Fixes Applied
 
 1. **Regex parsing bug** (double-escaped patterns) - Fixed, eliminated 100% parse failure
@@ -458,22 +474,47 @@ All experiments that produce *different* results are worth documenting - they gu
 
 ## Future Directions
 
-### Immediate Next Steps (This Week)
-1. Run output comparison analysis on current results
-2. Visualize steering vectors (PCA)
-3. Execute layer sweep experiment (L15-L30)
-4. Test task-specific prompts on promising layer
+### Immediate Next Steps: Validation (Exp 6)
 
-### Short-Term (Next 2-4 Weeks)
-1. Establish proof-of-concept on task subset
-2. Test ITI and function vector approaches
-3. Document findings in structured format
+**POC ESTABLISHED (Exp 5)** - Now validating and optimizing:
+
+1. **Phase 1: Reproducibility** (PRIORITY)
+   - Run best config (accuracy, L14, α=3.0) with seeds {0, 42, 123}
+   - Verify +9.7% improvement is stable (target: σ < 3%)
+   - Script: `./run_exp6_validate.sh 1`
+
+2. **Phase 2: Coefficient Optimization**
+   - Sweep α ∈ {2.0, 2.5, 3.0, 3.5, 4.0, 5.0}
+   - Identify if α=3.0 is truly optimal or if higher/lower works better
+   - Script: `./run_exp6_validate.sh 2`
+
+3. **Phase 3: Layer Optimization**
+   - Sweep layers {12, 13, 14, 15, 16}
+   - Confirm L14 (58% depth) is optimal for 0.5B
+   - Script: `./run_exp6_validate.sh 3`
+
+### Short-Term: Mechanism Analysis & Improvement
+
+1. **Steering Vector Computation Fix**
+   - Current: Uses response activations (non-standard)
+   - Standard CAA: Uses prompt-only activations
+   - Implement alternative: `_last_token_state` on prompt before generation
+   - Compare effectiveness of both approaches
+
+2. **Prompt Optimization**
+   - Test more contrastive prompt pairs
+   - Try task-decomposed prompts (separate format vs element selection)
+   - Test longer training (400-800 episodes for vector)
+
+3. **Error Analysis**
+   - Categorize remaining 71% failures: wrong ref vs parse vs impossible
+   - Identify if steering helps element selection or only format
 
 ### Long-Term
-1. Scale to 7B/14B models
-2. Explore cross-model generalization (Qwen → Llama)
-3. Multi-task steering (single vector for multiple web tasks)
-4. Publication: "Representation Engineering for Goal-Directed Agents"
+
+1. Scale to 7B model (hypothesis: intermediate parse failure rate)
+2. Multi-task steering generalization
+3. Publication: "Representation Engineering for Goal-Directed Agents"
 
 ---
 
@@ -512,5 +553,5 @@ All experiments that produce *different* results are worth documenting - they gu
 
 ---
 
-*Last Updated: 2026-01-05*
-*Status: Baseline established (69% accuracy), initial steering attempts failed (Exp 1-2), comprehensive literature review complete, ready for systematic diagnosis*
+*Last Updated: 2026-01-06*
+*Status: **POC ESTABLISHED** - 0.5B steering achieves +9.7% accuracy (+51% relative) and -32.8% parse failure reduction. Validation (Exp 6) pending.*

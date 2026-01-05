@@ -96,7 +96,7 @@ MEDIUM_DIFFICULTY_TASKS = [
 
 
 class SteeredModel:
-    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False):
+    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False, vector_method="response"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -106,11 +106,26 @@ class SteeredModel:
         self.layer_idx = layer_idx
         self.coeff = coeff
         self.steer_all_layers = steer_all_layers
+        self.vector_method = vector_method
         self.vector = None
         self._vector_cache = {}
 
     def _last_token_state(self, text):
+        """Non-standard: Extract activation from last token of generated response."""
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
+        with torch.no_grad():
+            out = self.model(**inputs, output_hidden_states=True)
+        return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
+
+    def _prompt_activation(self, prompt):
+        """Standard CAA: Extract activation from prompt BEFORE generation."""
+        messages = [{"role": "user", "content": prompt}]
+        formatted = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+        inputs = self.tokenizer(formatted, return_tensors="pt").to(self.device)
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
         return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
@@ -255,6 +270,7 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
     totals = None
     pbar = tqdm(total=steps, desc="vector")
     per_task = split_steps(steps, len(tasks))
+    
     for task, count in zip(tasks, per_task):
         if count == 0:
             continue
@@ -264,19 +280,26 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
             prompt = build_prompt(obs, max_elems)
             pos = f"{prompt}\n{POS_INSTR}"
             neg = f"{prompt}\n{NEG_INSTR}"
-            pos_text = model.generate(
-                pos,
-                steer=False,
-                max_new_tokens=max_new_tokens,
-                strip_prompt=False,
-            )
-            neg_text = model.generate(
-                neg,
-                steer=False,
-                max_new_tokens=max_new_tokens,
-                strip_prompt=False,
-            )
-            diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
+            
+            if model.vector_method == "prompt":
+                # Standard CAA: Extract from prompt before generation
+                diff = model._prompt_activation(pos) - model._prompt_activation(neg)
+            else:
+                # Non-standard (original): Extract from generated response
+                pos_text = model.generate(
+                    pos,
+                    steer=False,
+                    max_new_tokens=max_new_tokens,
+                    strip_prompt=False,
+                )
+                neg_text = model.generate(
+                    neg,
+                    steer=False,
+                    max_new_tokens=max_new_tokens,
+                    strip_prompt=False,
+                )
+                diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
+            
             totals = diff if totals is None else totals + diff
             pbar.update(1)
         env.close()
@@ -411,6 +434,8 @@ def main():
     parser.add_argument("--steer-all-layers", action="store_true", help="Apply steering to all layers from --layer onwards (multi-layer steering)")
     parser.add_argument("--prompt-type", choices=PROMPT_CONFIGS.keys(), default="verification",
                         help="Steering prompt type: verification, format, or accuracy")
+    parser.add_argument("--vector-method", choices=["response", "prompt"], default="response",
+                        help="Vector computation method: 'response' (non-standard, from generated text) or 'prompt' (standard CAA, from prompt only)")
     args = parser.parse_args()
 
     # Set steering prompts based on --prompt-type
@@ -418,6 +443,7 @@ def main():
     POS_INSTR = PROMPT_CONFIGS[args.prompt_type]["pos"]
     NEG_INSTR = PROMPT_CONFIGS[args.prompt_type]["neg"]
     print(f"Using prompt type: {args.prompt_type}")
+    print(f"Using vector method: {args.vector_method}")
 
     random.seed(args.seed)
     np.random.seed(args.seed)
@@ -439,7 +465,8 @@ def main():
         model_name,
         layer_idx=args.layer,
         coeff=args.coeff,
-        steer_all_layers=args.steer_all_layers
+        steer_all_layers=args.steer_all_layers,
+        vector_method=args.vector_method
     )
 
     if not args.base_only:

@@ -36,6 +36,7 @@ sudo apt-get install -y chromium-chromedriver
 | `--layer` | Starting intervention layer | `22` |
 | `--coeff` | Steering coefficient (α) | `1.0` |
 | `--prompt-type` | `verification`, `format`, `accuracy` | `verification` |
+| `--vector-method` | `response` (non-standard), `prompt` (standard CAA) | `response` |
 | `--tasks` | `all`, `high-potential`, `medium` | `all` |
 | `--steer-all-layers` | Multi-layer from `--layer` onwards | `false` |
 | `--base-only` | Skip steering, baseline only | `false` |
