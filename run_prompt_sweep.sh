@@ -16,17 +16,18 @@ set -e
 
 # Configuration (current best from Exp 6)
 LAYER=14
-COEFF=4.0
+COEFF=3.0
 MODEL="0.5b"
 TRAIN=200
 EVAL=400
 VECTOR_METHOD="response"
 
 # Output directory
-RESULTS_DIR="results/exp7_prompt_sweep"
+RESULTS_DIR="results/exp7_prompt_sweep_c3.0"
 mkdir -p $RESULTS_DIR
 
 # Prompt tiers
+ORIGINAL="accuracy verification format"
 TIER1="refined_accuracy attention confidence format_accuracy"
 TIER2="element_selection attribute_matching task_compliance deliberation"
 TIER3="minimalism goal_directed self_correction dom_reading"
@@ -36,6 +37,10 @@ TIER4="composite_1 composite_2 composite_3"
 TIER=${1:-all}
 
 case $TIER in
+    0)
+        PROMPTS=$ORIGINAL
+        echo "=== Running Original Prompts ==="
+        ;;
     1)
         PROMPTS=$TIER1
         echo "=== Running Tier 1: High-Confidence Prompts ==="
@@ -53,12 +58,12 @@ case $TIER in
         echo "=== Running Tier 4: Compositional Prompts ==="
         ;;
     all)
-        PROMPTS="$TIER1 $TIER2 $TIER3 $TIER4"
-        echo "=== Running ALL Tiers ==="
+        PROMPTS="$ORIGINAL $TIER1 $TIER2 $TIER3 $TIER4"
+        echo "=== Running ALL Tiers (Original + New) ==="
         ;;
     *)
         echo "Unknown tier: $TIER"
-        echo "Usage: ./run_prompt_sweep.sh [1|2|3|4|all]"
+        echo "Usage: ./run_prompt_sweep.sh [0|1|2|3|4|all]"
         exit 1
         ;;
 esac
@@ -73,20 +78,8 @@ echo "  Train Steps: $TRAIN"
 echo "  Eval Steps: $EVAL"
 echo ""
 
-# Run baseline (accuracy) first for comparison
-echo ">>> Running baseline: accuracy (current best)"
-python src/miniwob_steer.py \
-    --model-size $MODEL \
-    --layer $LAYER \
-    --coeff $COEFF \
-    --prompt-type accuracy \
-    --vector-method $VECTOR_METHOD \
-    --train-steps $TRAIN \
-    --eval-steps $EVAL \
-    --out $RESULTS_DIR/baseline_accuracy.jsonl
-
 echo ""
-echo ">>> Baseline complete. Starting prompt sweep..."
+echo ">>> Starting prompt sweep..."
 echo ""
 
 # Run each prompt
