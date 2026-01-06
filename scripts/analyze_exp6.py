@@ -18,7 +18,13 @@ def load_results(filepath):
     records = []
     with open(filepath) as f:
         for line in f:
-            records.append(json.loads(line))
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
     return records
 
 
