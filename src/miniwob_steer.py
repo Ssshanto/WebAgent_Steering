@@ -345,7 +345,8 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
             continue
         env = gym.make(f"miniwob/{task}-v1")
         for _ in range(count):
-            obs, _ = env.reset()
+            seed = random.randint(0, 2**31 - 1)
+            obs, _ = env.reset(seed=seed)
             prompt = build_prompt(obs, max_elems)
             pos = f"{prompt}\n{POS_INSTR}"
             neg = f"{prompt}\n{NEG_INSTR}"

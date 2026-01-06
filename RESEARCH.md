@@ -265,6 +265,16 @@ Recent LLM-based web agents show promise but face challenges:
   - `prompt`: Standard CAA method (extracts from prompt before generation)
   - Allows direct comparison of both approaches
 
+**Critical Bug Fix (2026-01-06):**
+- ✅ **Fixed:** Vector computation seeding bug
+  - **Issue**: `compute_vector()` used unseeded `env.reset()` calls
+  - **Impact**: Training episodes were completely random on each run, even with `--seed` flag
+  - **Symptoms**: Exp 5 success (+9.7%) could not be reproduced; Exp 7 only achieved +2.25%
+  - **Root cause**: Pre-existing bug since initial implementation, NOT caused by refactor
+  - **Fix**: Added `seed = random.randint(0, 2**31 - 1)` and `env.reset(seed=seed)` in `compute_vector()`
+  - **Result**: Vector computation now fully reproducible with `--seed` parameter
+  - This explains variability in steering effectiveness across runs
+
 ### Implementation Fixes Applied
 
 1. **Regex parsing bug** (double-escaped patterns) - Fixed, eliminated 100% parse failure
