@@ -5,7 +5,7 @@
 ### Phase 1: Reproducibility Validation (PRIORITY)
 ```bash
 cd /home/ssshanto/Documents/WebAgent_Steering
-./run_exp6_validate.sh 1
+./run_experiment.sh 1
 python3 scripts/analyze_exp6.py
 ```
 
@@ -18,7 +18,7 @@ python3 scripts/analyze_exp6.py
 ### Phase 2: Coefficient Optimization
 ```bash
 cd /home/ssshanto/Documents/WebAgent_Steering
-./run_exp6_validate.sh 2
+./run_experiment.sh 2
 python3 scripts/analyze_exp6.py
 ```
 
@@ -31,7 +31,7 @@ python3 scripts/analyze_exp6.py
 ### Phase 3: Layer Optimization
 ```bash
 cd /home/ssshanto/Documents/WebAgent_Steering
-./run_exp6_validate.sh 3
+./run_experiment.sh 3
 python3 scripts/analyze_exp6.py
 ```
 
@@ -41,15 +41,28 @@ python3 scripts/analyze_exp6.py
 
 ---
 
-### All Phases (Sequential)
+### Phase 4: Vector Method Comparison (NEW)
 ```bash
 cd /home/ssshanto/Documents/WebAgent_Steering
-./run_exp6_validate.sh all
+./run_experiment.sh 4
 python3 scripts/analyze_exp6.py
 ```
 
-**Expected runtime:** ~15 hours  
-**Runs:** Phase 1 → Phase 2 → Phase 3 sequentially
+**Expected runtime:** ~2 hours  
+**What it does:** Compares response method (original) vs prompt method (standard CAA)  
+**Output:** Direct comparison showing which method performs better
+
+---
+
+### All Phases (Sequential)
+```bash
+cd /home/ssshanto/Documents/WebAgent_Steering
+./run_experiment.sh all
+python3 scripts/analyze_exp6.py
+```
+
+**Expected runtime:** ~17 hours  
+**Runs:** Phase 1 → Phase 2 → Phase 3 → Phase 4 sequentially
 
 ---
 
@@ -80,6 +93,18 @@ Results will be saved to `results/` directory:
 - `results/exp6_coeff3.0.jsonl`
 - `results/exp6_coeff3.5.jsonl`
 - `results/exp6_coeff4.0.jsonl`
+- `results/exp6_coeff5.0.jsonl`
+
+**Phase 3:**
+- `results/exp6_layer12.jsonl`
+- `results/exp6_layer13.jsonl`
+- `results/exp6_layer14.jsonl`
+- `results/exp6_layer15.jsonl`
+- `results/exp6_layer16.jsonl`
+
+**Phase 4:**
+- `results/exp6_method_response.jsonl`
+- `results/exp6_method_prompt.jsonl`
 - `results/exp6_coeff5.0.jsonl`
 
 **Phase 3:**

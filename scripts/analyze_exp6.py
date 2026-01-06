@@ -189,6 +189,51 @@ def analyze_phase3(results_dir):
     return results
 
 
+def analyze_phase4(results_dir):
+    """Phase 4: Vector method comparison."""
+    print("\n" + "="*70)
+    print("PHASE 4: VECTOR METHOD COMPARISON")
+    print("="*70)
+    print("Best config (L14, α=3.0, seed=0) with different vector methods")
+    print()
+    
+    methods = ["response", "prompt"]
+    results = []
+    
+    print(f"{'Method':>10} {'Base':>8} {'Steer':>8} {'Change':>8} {'Parse Δ':>9} {'Speed':>8}")
+    print("-" * 70)
+    
+    for method in methods:
+        filepath = results_dir / f"exp6_method_{method}.jsonl"
+        if not filepath.exists():
+            print(f"{method:>10} {'MISSING':<60}")
+            continue
+        
+        records = load_results(filepath)
+        m = compute_metrics(records)
+        if m:
+            results.append((method, m))
+            status = "✓" if m["acc_delta"] > 0 else "✗"
+            # Speed indicator: prompt method should be ~2x faster
+            speed = "faster" if method == "prompt" else "baseline"
+            print(f"{method:>10} {m['base_acc']:>7.1f}% {m['steer_acc']:>7.1f}% "
+                  f"{m['acc_delta']:>+7.1f}% {m['parse_delta']:>+8.1f}% {speed:>8}")
+    
+    if len(results) == 2:
+        response_m = next(m for method, m in results if method == "response")
+        prompt_m = next(m for method, m in results if method == "prompt")
+        diff = prompt_m["acc_delta"] - response_m["acc_delta"]
+        print()
+        if abs(diff) < 1.0:
+            print(f"⚖️  Methods perform similarly (difference: {diff:+.1f}%)")
+        elif diff > 0:
+            print(f"🏆 Standard CAA (prompt) wins: {diff:+.1f}% better than response method")
+        else:
+            print(f"🏆 Response method wins: {-diff:+.1f}% better than standard CAA")
+    
+    return results
+
+
 def main():
     results_dir = Path("results")
     
@@ -200,10 +245,11 @@ def main():
     has_phase1 = any((results_dir / f"exp6_seed{s}.jsonl").exists() for s in [0, 42, 123])
     has_phase2 = any((results_dir / f"exp6_coeff{c}.jsonl").exists() for c in [2.0, 2.5, 3.0, 3.5, 4.0, 5.0])
     has_phase3 = any((results_dir / f"exp6_layer{l}.jsonl").exists() for l in [12, 13, 14, 15, 16])
+    has_phase4 = (results_dir / "exp6_method_response.jsonl").exists() or (results_dir / "exp6_method_prompt.jsonl").exists()
     
-    if not (has_phase1 or has_phase2 or has_phase3):
+    if not (has_phase1 or has_phase2 or has_phase3 or has_phase4):
         print("❌ No exp6_*.jsonl files found in results/")
-        print("Run: ./run_exp6_validate.sh [1|2|3|all]")
+        print("Run: ./run_experiment.sh [1|2|3|4|all]")
         sys.exit(1)
     
     # Analyze each phase
@@ -215,6 +261,9 @@ def main():
     
     if has_phase3:
         analyze_phase3(results_dir)
+    
+    if has_phase4:
+        analyze_phase4(results_dir)
     
     print("\n" + "="*70)
     print("ANALYSIS COMPLETE")

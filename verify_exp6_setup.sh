@@ -7,7 +7,7 @@ echo
 # Check files exist
 echo "1. Checking required files..."
 files=(
-    "run_exp6_validate.sh"
+    "run_experiment.sh"
     "scripts/analyze_exp6.py"
     "EXPERIMENT_6_INSTRUCTIONS.md"
     "src/miniwob_steer.py"
@@ -26,11 +26,11 @@ done
 # Check executability
 echo
 echo "2. Checking executability..."
-if [ -x "run_exp6_validate.sh" ]; then
-    echo "   ✓ run_exp6_validate.sh is executable"
+if [ -x "run_experiment.sh" ]; then
+    echo "   ✓ run_experiment.sh is executable"
 else
-    echo "   ✗ run_exp6_validate.sh not executable"
-    echo "   Fix: chmod +x run_exp6_validate.sh"
+    echo "   ✗ run_experiment.sh not executable"
+    echo "   Fix: chmod +x run_experiment.sh"
     all_good=false
 fi
 
@@ -62,11 +62,11 @@ fi
 # Check bash syntax
 echo
 echo "4. Validating shell script syntax..."
-bash -n run_exp6_validate.sh 2>&1
+bash -n run_experiment.sh 2>&1
 if [ $? -eq 0 ]; then
-    echo "   ✓ run_exp6_validate.sh syntax valid"
+    echo "   ✓ run_experiment.sh syntax valid"
 else
-    echo "   ✗ run_exp6_validate.sh has syntax errors"
+    echo "   ✗ run_experiment.sh has syntax errors"
     all_good=false
 fi
 
@@ -85,7 +85,8 @@ if [ "$all_good" = true ]; then
     echo "✅ All checks passed! Ready to run experiments."
     echo
     echo "Quick start:"
-    echo "  ./run_exp6_validate.sh 1    # Phase 1: Reproducibility (~3 hours)"
+    echo "  ./run_experiment.sh 1    # Phase 1: Reproducibility (~3 hours)"
+    echo "  ./run_experiment.sh 4    # Phase 4: Vector method comparison (~2 hours)"
     echo "  python3 scripts/analyze_exp6.py"
 else
     echo "⚠️  Some issues found. Please fix before running experiments."
