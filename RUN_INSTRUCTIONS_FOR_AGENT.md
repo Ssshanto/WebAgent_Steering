@@ -1,152 +1,85 @@
-# Run Instructions for Experiment 6
+# Run Instructions for Hyperparameter Optimization
 
 ## Quick Start (Copy-Paste Ready)
 
-### Phase 1: Reproducibility Validation (PRIORITY)
 ```bash
 cd /home/ssshanto/Documents/WebAgent_Steering
-./run_experiment.sh 1
-python3 scripts/analyze_exp6.py
+./run_optimization.sh
 ```
 
-**Expected runtime:** ~3 hours  
-**What it does:** Validates that best config (accuracy, L14, α=3.0) is reproducible across 3 seeds  
-**Success criteria:** Mean improvement ≥7%, StdDev <3%, all seeds positive
+**Expected runtime:** ~28 hours (28 configurations × ~1 hour each)  
+**What it does:** Sweeps layers {12, 13, 14, 15} × coefficients {2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0}  
+**Output:** Finds optimal layer and steering coefficient for 'accuracy' prompts
 
 ---
 
-### Phase 2: Coefficient Optimization
+## Analyze Results
+
+After completion (or partial runs):
 ```bash
-cd /home/ssshanto/Documents/WebAgent_Steering
-./run_experiment.sh 2
-python3 scripts/analyze_exp6.py
+python3 scripts/analyze_optimization.py
 ```
 
-**Expected runtime:** ~6 hours  
-**What it does:** Tests α ∈ {2.0, 2.5, 3.0, 3.5, 4.0, 5.0} to find optimal steering strength  
-**Output:** Best coefficient with improvement ranking
-
----
-
-### Phase 3: Layer Optimization
-```bash
-cd /home/ssshanto/Documents/WebAgent_Steering
-./run_experiment.sh 3
-python3 scripts/analyze_exp6.py
-```
-
-**Expected runtime:** ~6 hours  
-**What it does:** Tests layers {12, 13, 14, 15, 16} to confirm L14 is optimal  
-**Output:** Best layer with depth analysis
-
----
-
-### Phase 4: Vector Method Comparison (NEW)
-```bash
-cd /home/ssshanto/Documents/WebAgent_Steering
-./run_experiment.sh 4
-python3 scripts/analyze_exp6.py
-```
-
-**Expected runtime:** ~2 hours  
-**What it does:** Compares response method (original) vs prompt method (standard CAA)  
-**Output:** Direct comparison showing which method performs better
-
----
-
-### All Phases (Sequential)
-```bash
-cd /home/ssshanto/Documents/WebAgent_Steering
-./run_experiment.sh all
-python3 scripts/analyze_exp6.py
-```
-
-**Expected runtime:** ~17 hours  
-**Runs:** Phase 1 → Phase 2 → Phase 3 → Phase 4 sequentially
-
----
-
-## Pre-Flight Check
-
-Run this before starting experiments:
-```bash
-cd /home/ssshanto/Documents/WebAgent_Steering
-bash verify_exp6_setup.sh
-```
-
-Expected output: `✅ All checks passed! Ready to run experiments.`
+**What it shows:**
+- Best configuration (layer + coefficient)
+- Top 5 configurations ranked by improvement
+- Results grouped by layer for easy comparison
 
 ---
 
 ## Output Files
 
-Results will be saved to `results/` directory:
+Results are saved to `results/` directory with naming pattern:
+- `L{layer}_a{coeff}_s{seed}.jsonl`
 
-**Phase 1:**
-- `results/exp6_seed0.jsonl`
-- `results/exp6_seed42.jsonl`
-- `results/exp6_seed123.jsonl`
+Examples:
+- `results/L13_a4.0_s0.jsonl` → Layer 13, α=4.0, seed 0
+- `results/L14_a3.0_s0.jsonl` → Layer 14, α=3.0, seed 0
 
-**Phase 2:**
-- `results/exp6_coeff2.0.jsonl`
-- `results/exp6_coeff2.5.jsonl`
-- `results/exp6_coeff3.0.jsonl`
-- `results/exp6_coeff3.5.jsonl`
-- `results/exp6_coeff4.0.jsonl`
-- `results/exp6_coeff5.0.jsonl`
-
-**Phase 3:**
-- `results/exp6_layer12.jsonl`
-- `results/exp6_layer13.jsonl`
-- `results/exp6_layer14.jsonl`
-- `results/exp6_layer15.jsonl`
-- `results/exp6_layer16.jsonl`
-
-**Phase 4:**
-- `results/exp6_method_response.jsonl`
-- `results/exp6_method_prompt.jsonl`
-- `results/exp6_coeff5.0.jsonl`
-
-**Phase 3:**
-- `results/exp6_layer12.jsonl`
-- `results/exp6_layer13.jsonl`
-- `results/exp6_layer14.jsonl`
-- `results/exp6_layer15.jsonl`
-- `results/exp6_layer16.jsonl`
+Total: 28 files (4 layers × 7 coefficients)
 
 ---
 
 ## Analysis Output Example
 
-After running Phase 1 and analyzing:
 ```
-=== PHASE 1: REPRODUCIBILITY VALIDATION ===
-Seed   0: Base=19.0% | Steer=28.7% | Δ=+9.7% | Parse: 45.2%→12.5%
-Seed  42: Base=18.5% | Steer=27.8% | Δ=+9.3% | Parse: 46.0%→13.2%
-Seed 123: Base=19.2% | Steer=29.0% | Δ=+9.8% | Parse: 44.8%→12.0%
+=== HYPERPARAMETER OPTIMIZATION RESULTS ===
 
-Mean improvement: +9.6%
-Std deviation:    0.3%
+🏆 BEST CONFIGURATION:
+Layer 13, α=4.0: Base=19.0% | Steered=36.5% | Δ=+17.5%
 
-✅ PASS: Mean improvement 9.6% ≥ 7.0%
-✅ PASS: Std deviation 0.3% < 3.0%
-✅ PASS: All seeds show positive improvement
+📊 TOP 5 CONFIGURATIONS:
+1. L13, α=4.0:  +17.5%  (Base: 19.0% → Steered: 36.5%)
+2. L13, α=4.5:  +15.2%  (Base: 19.0% → Steered: 34.2%)
+3. L14, α=3.5:  +14.8%  (Base: 19.0% → Steered: 33.8%)
+4. L13, α=3.5:  +13.9%  (Base: 19.0% → Steered: 32.9%)
+5. L12, α=4.0:  +12.5%  (Base: 19.0% → Steered: 31.5%)
 
-🎉 REPRODUCIBILITY VALIDATED
+📈 RESULTS BY LAYER:
+Layer 12: Best α=4.0 (+12.5%)
+Layer 13: Best α=4.0 (+17.5%) ⭐
+Layer 14: Best α=3.5 (+14.8%)
+Layer 15: Best α=3.0 (+10.2%)
 ```
+
+---
+
+## Resume Capability
+
+The script automatically skips completed configurations:
+```bash
+./run_optimization.sh  # Resumes from where it left off
+```
+
+Manual skip: Comment out completed configs in the script.
 
 ---
 
 ## Troubleshooting
 
-**If Phase 1 analysis shows FAIL:**
-- Check individual seed results for patterns
-- Examine if specific tasks are highly variable
-- Consider the parse failure reduction (may be consistent even if accuracy varies)
-
-**If scripts don't run:**
-- Verify: `bash verify_exp6_setup.sh`
+**If script fails:**
 - Check Python: `python3 --version` (needs 3.8+)
+- Check dependencies: `pip install -r requirements.txt`
 - Check CUDA: `nvidia-smi` (optional, will use CPU if unavailable)
 
 **If out of memory:**
@@ -154,30 +87,47 @@ Std deviation:    0.3%
 - Will automatically fall back to CPU if GPU unavailable
 - CPU is ~4x slower but will work
 
+**If results look wrong:**
+- Verify baseline: Should be ~19% accuracy (0.5B model, 25 tasks)
+- Check parse failures: Should be ~45% at baseline
+- Steering should improve both accuracy AND reduce parse failures
+
 ---
 
 ## What to Report Back
 
-After Phase 1 completes, report:
-1. ✅/❌ Reproducibility validation result
-2. Mean improvement across 3 seeds
-3. Standard deviation
-4. Any anomalies or unexpected patterns
+After optimization completes:
+1. Best layer and coefficient
+2. Improvement achieved (Δ%)
+3. Top 3-5 configurations for comparison
+4. Any unexpected patterns (e.g., layer trends)
 
-After Phase 2 & 3 complete, report:
-1. Best coefficient (α) and its improvement
-2. Best layer and its improvement
-3. Whether optimization found better config than original (L14, α=3.0)
+---
+
+## Configuration Details
+
+**Fixed parameters:**
+- Model: Qwen 2.5 0.5B Instruct
+- Prompt: 'accuracy' (positive: "Be accurate and precise...", negative: "Be inaccurate and imprecise...")
+- Vector method: 'response' (extracts from last token of generated response)
+- Train steps: 200 episodes for vector computation
+- Eval steps: 400 episodes for evaluation (200 base + 200 steered)
+- Seed: 0 (for reproducibility)
+- Tasks: All 25 tasks (18 original + 7 expanded)
+
+**Swept parameters:**
+- Layers: {12, 13, 14, 15} (middle-to-late layers of 24-layer model)
+- Coefficients: {2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0} (steering strength multiplier)
 
 ---
 
 ## Notes
 
-- Each phase can be run independently
-- Analysis script auto-detects which phases have results
-- Safe to re-run analysis multiple times
-- Safe to re-run experiments (will overwrite previous results)
+- Script is resumable: Already-completed configs are skipped
+- Each config takes ~1 hour (depending on hardware)
+- GPU recommended but not required (CPU fallback available)
+- Results are independent: Safe to run different configs in parallel on different machines
 
 ---
 
-*Implementation verified: 2026-01-05*
+*Last updated: 2026-01-05*

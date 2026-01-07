@@ -4,7 +4,7 @@ Proof-of-concept for applying representation steering to improve LLM performance
 
 **Research documentation**: See `RESEARCH.md` for full background, literature, and experiment details.
 
-**Current Status**: +17.5% accuracy improvement on 0.5B model with Layer 13, α=4.0, accuracy prompts.
+**Current Status**: Finding optimal layer/coefficient configuration for accuracy prompts.
 
 ## Setup
 
@@ -15,60 +15,92 @@ pip install -r requirements.txt
 sudo apt-get install -y chromium-chromedriver
 ```
 
-## Experiments
+## Quick Start
 
-**Experiment 10 (Expanded Action Space):**
+**Find Best Configuration:**
 ```bash
-./run_exp10_expanded.sh
-python scripts/analyze_exp10.py
-```
-- Tests steering on complex interactions (multi-select, dropdowns, semantic typing)
-- Uses golden config: Layer 13, α=4.0, response method
-- 7 new task categories beyond simple click/type
+# Run hyperparameter sweep (layers 12-15, coefficients 2.0-5.0)
+./run_optimization.sh
 
-**Experiment 6 (Validation & Optimization):**
-```bash
-./run_experiment.sh 1  # Reproducibility
-./run_experiment.sh 4  # Vector method comparison
-python scripts/analyze_exp6.py
+# Analyze results and find best configuration
+python scripts/analyze_optimization.py
 ```
 
-**Previous experiments:**
-- Exp 9: Prompt strategy sweep → accuracy prompts optimal
-- Exp 5: 0.5B POC → +9.7% with seeding bug
-- Exp 1-4: 3B model → no improvement (well-calibrated)
+**Runtime:** ~28 hours (28 configurations × ~1 hour each)
 
-## CLI Options
+## What It Does
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--model-size` | `0.5b`, `3b` | `0.5b` |
-| `--layer` | Starting intervention layer | `22` |
-| `--coeff` | Steering coefficient (α) | `1.0` |
-| `--prompt-type` | `verification`, `format`, `accuracy`, etc. | `verification` |
-| `--vector-method` | `response` (non-standard), `prompt` (standard CAA) | `response` |
-| `--tasks` | `all`, `high-potential`, `medium`, `expanded` | `all` |
-| `--steer-all-layers` | Multi-layer from `--layer` onwards | `false` |
-| `--base-only` | Skip steering, baseline only | `false` |
+1. **Sweeps hyperparameters:**
+   - Layers: 12, 13, 14, 15 (50-62% model depth)
+   - Coefficients: 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0
+   - Fixed: accuracy prompts, response method, seed=0
 
-## Task Subsets
+2. **Tests on 25 tasks:**
+   - 18 original tasks (click, type, simple interactions)
+   - 7 expanded tasks (checkboxes, dropdowns, semantic typing)
 
-| Subset | Description |
-|--------|-------------|
-| `all` | 25 single-step MiniWob tasks (18 original + 7 expanded) |
-| `medium` | 4 tasks at 54-82% base accuracy |
-| `high-potential` | 6 tasks at 65-100% base accuracy |
-| `expanded` | 7 complex interaction tasks (multi-select, dropdown, semantic) |
+3. **Finds optimal configuration:**
+   - Best layer/coefficient combination
+   - Maximum accuracy improvement
+   - Minimal parse failures
 
-## Action Space
+## Configuration Options
 
-**Supported Actions:**
-- `click ref=<int>` - Click an element
-- `type ref=<int> text="<text>"` - Type text into field
-- `select ref=<int> option="<text>"` - Select dropdown option (NEW)
+The script uses these settings (can be modified in `run_optimization.sh`):
 
-**Multiple Actions:** Supported for tasks like `click-checkboxes` (output multiple lines)
+| Parameter | Value | Notes |
+|-----------|-------|-------|
+| Model | Qwen 2.5 0.5B | Small model with high parse failures |
+| Prompt | accuracy | "Be accurate and precise..." |
+| Vector Method | response | Extract from generated text |
+| Train Steps | 200 | Episodes for vector computation |
+| Eval Steps | 400 | Episodes for evaluation |
+| Tasks | all | 25 single-step tasks |
+
+## CLI Usage (Advanced)
+
+If you want to run specific configurations manually:
+
+```bash
+python src/miniwob_steer.py \
+  --model-size 0.5b \
+  --layer 13 \
+  --coeff 4.0 \
+  --prompt-type accuracy \
+  --vector-method response \
+  --tasks all \
+  --train-steps 200 \
+  --eval-steps 400 \
+  --seed 0 \
+  --out results/custom.jsonl
+```
+
+### Available Flags
+
+| Flag | Options | Default | Description |
+|------|---------|---------|-------------|
+| `--model-size` | `0.5b`, `3b` | `0.5b` | Model size |
+| `--layer` | 0-23 (0.5b), 0-35 (3b) | `22` | Steering layer |
+| `--coeff` | any float | `1.0` | Steering coefficient |
+| `--prompt-type` | see PROMPT_CONFIGS | `verification` | Steering prompt |
+| `--vector-method` | `response`, `prompt` | `response` | Vector computation |
+| `--tasks` | `all`, `expanded`, or comma-separated | `all` | Task subset |
+| `--train-steps` | any int | `200` | Vector training episodes |
+| `--eval-steps` | any int | `200` | Evaluation episodes |
+| `--seed` | any int | `0` | Random seed |
 
 ## Output
 
-JSONL with: `task`, `seed`, `base_output`, `base_success`, `steer_output`, `steer_success`
+Results are saved to `results/L{layer}_a{coeff}_s{seed}.jsonl` with:
+- `task`, `seed`: Episode info
+- `base_output`, `base_success`: Baseline performance
+- `steer_output`, `steer_success`: Steered performance
+- `base_action`, `steer_action`: Parsed actions
+
+## Next Steps
+
+After finding the best configuration:
+1. Validate reproducibility across seeds
+2. Test on expanded action space tasks
+3. Compare different prompt strategies
+4. Scale to larger models (3B, 7B)
