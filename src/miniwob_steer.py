@@ -17,6 +17,7 @@ MODEL_MAP = {
 }
 
 SINGLE_STEP_TASKS = [
+    # Simple click tasks
     "click-test",
     "click-test-2",
     "click-test-transfer",
@@ -30,24 +31,64 @@ SINGLE_STEP_TASKS = [
     "click-shape",
     "click-tab",
     "click-widget",
+    # Text input tasks
     "focus-text",
     "focus-text-2",
+    "unicode-test",
+    # Other simple tasks
     "grid-coordinate",
     "identify-shape",
-    "unicode-test",
+    # Complex interaction tasks (NEW)
+    "click-checkboxes",     # Multi-selection state
+    "click-option",         # RadioButton state
+    "choose-list",          # Dropdown interaction
+    "choose-date",          # Date picker interaction
+    "enter-date",           # Semantic constraint typing
+    "enter-time",           # Semantic constraint typing
+    "guess-number",         # Feedback loop/logic
 ]
 
+# Task categories for analysis
+TASK_CATEGORIES = {
+    "simple_click": [
+        "click-test", "click-test-2", "click-test-transfer", "click-button",
+        "click-link", "click-color", "click-dialog", "click-dialog-2",
+        "click-pie", "click-pie-nodelay", "click-shape", "click-tab", "click-widget"
+    ],
+    "simple_type": [
+        "focus-text", "focus-text-2", "unicode-test"
+    ],
+    "multi_select": [
+        "click-checkboxes", "click-option"
+    ],
+    "dropdown": [
+        "choose-list", "choose-date"
+    ],
+    "semantic_type": [
+        "enter-date", "enter-time"
+    ],
+    "logic": [
+        "guess-number"
+    ],
+    "other": [
+        "grid-coordinate", "identify-shape"
+    ]
+}
+
 SYSTEM_PROMPT = (
-    "You are a web automation engine. Output a single action command.\n"
+    "You are a web automation engine. Output action commands.\n"
     "Strict format rules:\n"
-    "- Output exactly one line.\n"
+    "- Output one action per line.\n"
+    "- For single actions: output exactly one line.\n"
+    "- For multiple actions: output multiple lines (e.g., for checkboxes).\n"
     "- No explanations, no preamble, no lists, no code fences.\n"
-    "- The line must match one of the allowed action formats."
+    "- Each line must match one of the allowed action formats."
 )
 ACTION_FORMAT = (
     "Actions (match exactly):\n"
     "- click ref=<int>\n"
-    "- type ref=<int> text=\"<text>\""
+    "- type ref=<int> text=\"<text>\"\n"
+    "- select ref=<int> option=\"<text>\""
 )
 # Steering prompt configurations
 # Select via --prompt-type argument
@@ -161,6 +202,18 @@ MEDIUM_DIFFICULTY_TASKS = [
     "click-dialog-2",    # 63.6% base - dialog with options
     "click-link",        # 63.6% base - link selection
     "click-button",      # 81.8% base - included for statistical power
+]
+
+# Expanded action space tasks (NEW - Exp 10)
+# Complex interactions beyond simple click/type
+EXPANDED_TASKS = [
+    "click-checkboxes",  # Multi-selection state
+    "click-option",      # RadioButton state
+    "choose-list",       # Dropdown interaction
+    "choose-date",       # Date picker interaction
+    "enter-date",        # Semantic constraint typing
+    "enter-time",        # Semantic constraint typing
+    "guess-number",      # Feedback loop/logic
 ]
 
 
@@ -301,32 +354,72 @@ def build_prompt(obs, max_elems):
 
 
 def parse_action(text):
+    """Parse action(s) from model output. Returns list of actions or None."""
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     if not lines:
         return None
-    line = lines[0]
-    match = re.fullmatch(r"click\s+ref=(\d+)", line, flags=re.IGNORECASE)
-    if match:
-        return {"action": "CLICK", "ref": int(match.group(1)), "text": ""}
-    match = re.fullmatch(r'type\s+ref=(\d+)\s+text=\"(.*)\"', line, flags=re.IGNORECASE)
-    if match:
-        return {"action": "TYPE", "ref": int(match.group(1)), "text": match.group(2)}
-    return None
+    
+    actions = []
+    for line in lines:
+        # Try click pattern
+        match = re.fullmatch(r"click\s+ref=(\d+)", line, flags=re.IGNORECASE)
+        if match:
+            actions.append({"action": "CLICK", "ref": int(match.group(1)), "text": "", "option": ""})
+            continue
+        
+        # Try type pattern
+        match = re.fullmatch(r'type\s+ref=(\d+)\s+text=\"(.*)\"', line, flags=re.IGNORECASE)
+        if match:
+            actions.append({"action": "TYPE", "ref": int(match.group(1)), "text": match.group(2), "option": ""})
+            continue
+        
+        # Try select pattern
+        match = re.fullmatch(r'select\s+ref=(\d+)\s+option=\"(.*)\"', line, flags=re.IGNORECASE)
+        if match:
+            actions.append({"action": "SELECT", "ref": int(match.group(1)), "text": "", "option": match.group(2)})
+            continue
+        
+        # If line doesn't match any pattern, ignore it (allows for robustness)
+    
+    return actions if actions else None
 
 
-def step_env(env, action):
-    if not action:
+def step_env(env, actions):
+    """Execute action(s) in environment. Supports single or multiple actions."""
+    if not actions:
         act = env.unwrapped.create_action(ActionTypes.NONE)
-    elif action["action"] == "CLICK":
-        act = env.unwrapped.create_action(ActionTypes.CLICK_ELEMENT, ref=action["ref"])
-    else:
-        act = env.unwrapped.create_action(
-            ActionTypes.FOCUS_ELEMENT_AND_TYPE_TEXT,
-            ref=action["ref"],
-            text=str(action.get("text", "")),
-        )
-    _obs, reward, terminated, truncated, _info = env.step(act)
-    return reward, terminated or truncated
+        _obs, reward, terminated, truncated, _info = env.step(act)
+        return reward, terminated or truncated
+    
+    # Execute all actions sequentially
+    final_reward = 0
+    final_terminated = False
+    
+    for action in actions:
+        if action["action"] == "CLICK":
+            act = env.unwrapped.create_action(ActionTypes.CLICK_ELEMENT, ref=action["ref"])
+        elif action["action"] == "SELECT":
+            # SELECT is implemented as TYPE for dropdowns (MiniWob limitation)
+            act = env.unwrapped.create_action(
+                ActionTypes.FOCUS_ELEMENT_AND_TYPE_TEXT,
+                ref=action["ref"],
+                text=action["option"],
+            )
+        else:  # TYPE
+            act = env.unwrapped.create_action(
+                ActionTypes.FOCUS_ELEMENT_AND_TYPE_TEXT,
+                ref=action["ref"],
+                text=str(action.get("text", "")),
+            )
+        
+        _obs, reward, terminated, truncated, _info = env.step(act)
+        final_reward = reward  # Keep last reward
+        final_terminated = terminated or truncated
+        
+        if final_terminated:
+            break
+    
+    return final_reward, final_terminated
 
 
 def split_steps(total_steps, num_tasks):
@@ -527,6 +620,8 @@ def main():
         tasks = HIGH_POTENTIAL_TASKS
     elif args.tasks == "medium":
         tasks = MEDIUM_DIFFICULTY_TASKS
+    elif args.tasks == "expanded":
+        tasks = EXPANDED_TASKS
     else:
         tasks = [t.strip() for t in args.tasks.split(",") if t.strip()]
 

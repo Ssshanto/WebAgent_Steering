@@ -4,6 +4,8 @@ Proof-of-concept for applying representation steering to improve LLM performance
 
 **Research documentation**: See `RESEARCH.md` for full background, literature, and experiment details.
 
+**Current Status**: +17.5% accuracy improvement on 0.5B model with Layer 13, α=4.0, accuracy prompts.
+
 ## Setup
 
 ```bash
@@ -15,18 +17,26 @@ sudo apt-get install -y chromium-chromedriver
 
 ## Experiments
 
-**Experiment 5 (Current): 0.5B model steering**
+**Experiment 10 (Expanded Action Space):**
 ```bash
-./run_exp5_0.5b.sh exp5_0.5b
+./run_exp10_expanded.sh
+python scripts/analyze_exp10.py
 ```
-- Tests if smaller models have more "steer-able" failures
-- Includes baseline + verification + format-focused steering
-- Analysis: `python scripts/analyze_exp5.py`
+- Tests steering on complex interactions (multi-select, dropdowns, semantic typing)
+- Uses golden config: Layer 13, α=4.0, response method
+- 7 new task categories beyond simple click/type
 
-**Previous experiments (3B model - all failed):**
-- Exp 4: Layer sweep on medium tasks → 0% to -1%
-- Exp 3: Coefficient sweep on high-potential → 0% (ceiling effect)
-- Exp 1-2: Accuracy prompts → 0% to -0.5%
+**Experiment 6 (Validation & Optimization):**
+```bash
+./run_experiment.sh 1  # Reproducibility
+./run_experiment.sh 4  # Vector method comparison
+python scripts/analyze_exp6.py
+```
+
+**Previous experiments:**
+- Exp 9: Prompt strategy sweep → accuracy prompts optimal
+- Exp 5: 0.5B POC → +9.7% with seeding bug
+- Exp 1-4: 3B model → no improvement (well-calibrated)
 
 ## CLI Options
 
@@ -35,9 +45,9 @@ sudo apt-get install -y chromium-chromedriver
 | `--model-size` | `0.5b`, `3b` | `0.5b` |
 | `--layer` | Starting intervention layer | `22` |
 | `--coeff` | Steering coefficient (α) | `1.0` |
-| `--prompt-type` | `verification`, `format`, `accuracy` | `verification` |
+| `--prompt-type` | `verification`, `format`, `accuracy`, etc. | `verification` |
 | `--vector-method` | `response` (non-standard), `prompt` (standard CAA) | `response` |
-| `--tasks` | `all`, `high-potential`, `medium` | `all` |
+| `--tasks` | `all`, `high-potential`, `medium`, `expanded` | `all` |
 | `--steer-all-layers` | Multi-layer from `--layer` onwards | `false` |
 | `--base-only` | Skip steering, baseline only | `false` |
 
@@ -45,9 +55,19 @@ sudo apt-get install -y chromium-chromedriver
 
 | Subset | Description |
 |--------|-------------|
-| `all` | 18 single-step MiniWob tasks |
+| `all` | 25 single-step MiniWob tasks (18 original + 7 expanded) |
 | `medium` | 4 tasks at 54-82% base accuracy |
 | `high-potential` | 6 tasks at 65-100% base accuracy |
+| `expanded` | 7 complex interaction tasks (multi-select, dropdown, semantic) |
+
+## Action Space
+
+**Supported Actions:**
+- `click ref=<int>` - Click an element
+- `type ref=<int> text="<text>"` - Type text into field
+- `select ref=<int> option="<text>"` - Select dropdown option (NEW)
+
+**Multiple Actions:** Supported for tasks like `click-checkboxes` (output multiple lines)
 
 ## Output
 
