@@ -62,4 +62,13 @@ def analyze_exp9():
         print(f"RESULTS FOR ALPHA = {alpha}")
         print("="*80)
         print(f"{'Prompt':<25} | {'Base':<8} | {'Steer':<8} | {'Delta':<8} | {'Parse Δ':<8} | {'N':<5}")
-        print("-
+        print("-" * 80)
+        
+        # Sort by Delta descending
+        runs = sorted(data[alpha], key=lambda x: x["delta"], reverse=True)
+        
+        for r in runs:
+            print(f"{r['prompt']:<25} | {r['base']:>6.1f}% | {r['steer']:>6.1f}% | {r['delta']:>+6.1f}% | {r['parse_delta']:>+6.1f}% | {r['total']}")
+
+if __name__ == "__main__":
+    analyze_exp9()
