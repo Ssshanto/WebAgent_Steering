@@ -25,7 +25,7 @@ echo "Prompt: combined (format_accuracy + composite_1)"
 echo "========================================"
 
 python src/miniwob_steer.py \
-    --model-size $MODEL_SIZE \
+    --model $MODEL_SIZE \
     --layer $LAYER \
     --coeff $COEFF \
     --tasks $TASKS \
