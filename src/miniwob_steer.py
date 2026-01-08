@@ -76,44 +76,86 @@ ACTION_FORMAT = (
 # =============================================================================
 
 PROMPT_CONFIGS = {
-    # --- ACTION-GROUNDED PROMPTS (Target decision-making) ---
-
-    # Primary: Target correct action selection
-    "action": {
-        "pos": "Select the correct element and action that completes the task.",
-        "neg": "Select a random element. Output an incorrect action.",
-    },
-
-    # Grounding: Bind task to DOM elements
-    "grounding": {
-        "pos": "Match the task requirement to the correct DOM element.",
-        "neg": "Ignore the task requirement. Select any element.",
-    },
-
-    # Precision: Target element matching
-    "precision": {
-        "pos": "The element must exactly match what the task asks for.",
-        "neg": "The element does not need to match. Any element works.",
-    },
-
-    # --- BEHAVIORAL PROMPTS (Target cognitive style) ---
-
-    # Accuracy: General carefulness (proven effective)
+    # --- ORIGINAL PROMPTS ---
     "accuracy": {
         "pos": "Be accurate and precise. Ensure your answer is exactly correct.",
         "neg": "Be inaccurate and imprecise. Answer without checking.",
     },
-
-    # Format: Output compliance
+    "verification": {
+        "pos": "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer.",
+        "neg": "Respond immediately with your first instinct. Skip verification.",
+    },
     "format": {
         "pos": "Output only the action command. No explanations.",
         "neg": "Explain your reasoning in detail before the action.",
     },
 
-    # Combined: Action + Format
-    "action_format": {
-        "pos": "Select the correct element. Output only the action.",
-        "neg": "Select randomly. Explain at length.",
+    # --- TIER 1: HIGH-CONFIDENCE ---
+    "refined_accuracy": {
+        "pos": "Be accurate and precise. Read each element carefully. Match the exact requirements before responding.",
+        "neg": "Be inaccurate and imprecise. Skim quickly. Respond without matching requirements.",
+    },
+    "attention": {
+        "pos": "Pay close attention to every detail. Consider each option carefully before deciding.",
+        "neg": "Pay no attention to details. Make a quick decision without considering options.",
+    },
+    "confidence": {
+        "pos": "Be confident and decisive. Output your answer directly with no hesitation.",
+        "neg": "Be uncertain and hesitant. Express doubt and explain your uncertainty.",
+    },
+    "format_accuracy": {
+        "pos": "Output one precise action. Be accurate. No explanations.",
+        "neg": "Explain your reasoning. Be careless. Verbose output.",
+    },
+
+    # --- TIER 2: MEDIUM-CONFIDENCE ---
+    "element_selection": {
+        "pos": "Select the element that exactly matches the task. Verify the ref number is correct.",
+        "neg": "Select any element without checking. Don't verify the ref number.",
+    },
+    "attribute_matching": {
+        "pos": "Match all attributes exactly. The text, id, and class must align with requirements.",
+        "neg": "Ignore attribute matching. Select based on first impression only.",
+    },
+    "task_compliance": {
+        "pos": "Follow the task instruction exactly. Do precisely what is asked.",
+        "neg": "Ignore the task instruction. Do something approximate or unrelated.",
+    },
+    "deliberation": {
+        "pos": "Think carefully before acting. Consider the consequences of your choice.",
+        "neg": "Act impulsively. Don't think about consequences.",
+    },
+
+    # --- TIER 3: EXPLORATORY ---
+    "minimalism": {
+        "pos": "Respond with the absolute minimum. One line. No extra words.",
+        "neg": "Respond with maximum verbosity. Explain everything in detail.",
+    },
+    "goal_directed": {
+        "pos": "Achieve the goal successfully. Ensure your action leads to task completion.",
+        "neg": "Don't care about the goal. Your action doesn't need to work.",
+    },
+    "self_correction": {
+        "pos": "Check your answer before responding. Correct any mistakes silently.",
+        "neg": "Output your first thought. Don't check or correct anything.",
+    },
+    "dom_reading": {
+        "pos": "Read the HTML structure carefully. Parse each element's attributes.",
+        "neg": "Skim the HTML quickly. Don't parse element attributes.",
+    },
+
+    # --- TIER 4: COMPOSITIONAL ---
+    "composite_1": {
+        "pos": "One line output. Pay attention. Be accurate.",
+        "neg": "Verbose explanation. Inattentive. Inaccurate.",
+    },
+    "composite_2": {
+        "pos": "Minimal output. Precise action. Follow task exactly.",
+        "neg": "Maximum verbosity. Imprecise. Ignore task.",
+    },
+    "composite_3": {
+        "pos": "Confident. One line. Achieve the goal.",
+        "neg": "Uncertain. Explain at length. Don't care about goal.",
     },
 }
 
