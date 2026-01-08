@@ -1,10 +1,16 @@
 # Representation Engineering for Web Agents
 
-Proof-of-concept for applying representation steering to improve LLM performance on web automation tasks (MiniWob++) in a zero-shot setting.
+Zero-shot steering of LLM web agents using Contrastive Activation Addition (CAA).
 
-**Research documentation**: See `RESEARCH.md` for full background, literature, and experiment details.
+## Hypothesis
 
-**Current Status**: Finding optimal layer/coefficient configuration for accuracy prompts.
+**Steering can improve LLM web agent performance by enhancing action-space understanding** - without task-specific fine-tuning or examples.
+
+## Method
+
+1. **Compute steering vector** from contrastive prompt pairs (e.g., "correct action" vs "random action")
+2. **Apply vector** during inference at target layer with coefficient α
+3. **Evaluate** baseline vs steered accuracy on MiniWob++ benchmark
 
 ## Setup
 
@@ -17,90 +23,71 @@ sudo apt-get install -y chromium-chromedriver
 
 ## Quick Start
 
-**Find Best Configuration:**
 ```bash
-# Run hyperparameter sweep (layers 12-15, coefficients 2.0-5.0)
-./run_optimization.sh
+# Run experiment (default: accuracy prompt)
+./run.sh
 
-# Analyze results and find best configuration
-python scripts/analyze_optimization.py
+# Test different steering prompts
+./run.sh action      # Action-grounded: target decision-making
+./run.sh grounding   # Task-DOM binding
+./run.sh precision   # Element matching
+./run.sh format      # Output compliance
 ```
 
-**Runtime:** ~28 hours (28 configurations × ~1 hour each)
+## Steering Prompts
 
-## What It Does
+| Prompt | Positive | Negative | Target |
+|--------|----------|----------|--------|
+| `action` | "Select the correct element and action" | "Select random element, incorrect action" | Decision |
+| `grounding` | "Match task to correct DOM element" | "Ignore task, select any element" | Binding |
+| `precision` | "Element must exactly match task" | "Element doesn't need to match" | Matching |
+| `accuracy` | "Be accurate and precise" | "Be inaccurate and imprecise" | Cognitive |
+| `format` | "Output only action command" | "Explain reasoning in detail" | Output |
+| `action_format` | "Select correct element. Output only action" | "Select randomly. Explain at length" | Combined |
 
-1. **Sweeps hyperparameters:**
-   - Layers: 12, 13, 14, 15 (50-62% model depth)
-   - Coefficients: 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0
-   - Fixed: accuracy prompts, response method, seed=0
+## Configuration
 
-2. **Tests on 25 tasks:**
-   - 18 original tasks (click, type, simple interactions)
-   - 7 expanded tasks (checkboxes, dropdowns, semantic typing)
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `--model` | 0.5b | Model size (0.5b, 3b) |
+| `--layer` | 14 | Intervention layer (~60% depth) |
+| `--coeff` | 4.0 | Steering coefficient α |
+| `--prompt-type` | accuracy | Steering prompt type |
+| `--vector-method` | response | Vector computation method |
+| `--train-steps` | 200 | Episodes for vector computation |
+| `--eval-steps` | 400 | Episodes for evaluation |
+| `--seed` | 0 | Random seed |
 
-3. **Finds optimal configuration:**
-   - Best layer/coefficient combination
-   - Maximum accuracy improvement
-   - Minimal parse failures
-
-## Configuration Options
-
-The script uses these settings (can be modified in `run_optimization.sh`):
-
-| Parameter | Value | Notes |
-|-----------|-------|-------|
-| Model | Qwen 2.5 0.5B | Small model with high parse failures |
-| Prompt | accuracy | "Be accurate and precise..." |
-| Vector Method | response | Extract from generated text |
-| Train Steps | 200 | Episodes for vector computation |
-| Eval Steps | 400 | Episodes for evaluation |
-| Tasks | all | 25 single-step tasks |
-
-## CLI Usage (Advanced)
-
-If you want to run specific configurations manually:
+## CLI Usage
 
 ```bash
 python src/miniwob_steer.py \
-  --model-size 0.5b \
-  --layer 13 \
-  --coeff 4.0 \
-  --prompt-type accuracy \
-  --vector-method response \
-  --tasks all \
-  --train-steps 200 \
-  --eval-steps 400 \
-  --seed 0 \
-  --out results/custom.jsonl
+    --model 0.5b \
+    --layer 14 \
+    --coeff 4.0 \
+    --prompt-type action \
+    --tasks all \
+    --out results.jsonl
 ```
-
-### Available Flags
-
-| Flag | Options | Default | Description |
-|------|---------|---------|-------------|
-| `--model-size` | `0.5b`, `3b` | `0.5b` | Model size |
-| `--layer` | 0-23 (0.5b), 0-35 (3b) | `22` | Steering layer |
-| `--coeff` | any float | `1.0` | Steering coefficient |
-| `--prompt-type` | see PROMPT_CONFIGS | `verification` | Steering prompt |
-| `--vector-method` | `response`, `prompt` | `response` | Vector computation |
-| `--tasks` | `all`, `expanded`, or comma-separated | `all` | Task subset |
-| `--train-steps` | any int | `200` | Vector training episodes |
-| `--eval-steps` | any int | `200` | Evaluation episodes |
-| `--seed` | any int | `0` | Random seed |
 
 ## Output
 
-Results are saved to `results/L{layer}_a{coeff}_s{seed}.jsonl` with:
+Results saved to JSONL with per-episode records:
 - `task`, `seed`: Episode info
 - `base_output`, `base_success`: Baseline performance
 - `steer_output`, `steer_success`: Steered performance
-- `base_action`, `steer_action`: Parsed actions
 
-## Next Steps
+## Files
 
-After finding the best configuration:
-1. Validate reproducibility across seeds
-2. Test on expanded action space tasks
-3. Compare different prompt strategies
-4. Scale to larger models (3B, 7B)
+```
+.
+├── src/miniwob_steer.py   # Main implementation
+├── run.sh                 # Run script
+├── RESEARCH.md            # Research log & results
+├── README.md              # This file
+└── requirements.txt       # Dependencies
+```
+
+## Research Log
+
+See `RESEARCH.md` for detailed experimental results, literature review, and analysis.
