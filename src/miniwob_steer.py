@@ -76,13 +76,11 @@ TASK_CATEGORIES = {
 }
 
 SYSTEM_PROMPT = (
-    "You are a web automation engine. Output action commands.\n"
+    "You are a web automation engine. Output a single action command.\n"
     "Strict format rules:\n"
-    "- Output one action per line.\n"
-    "- For single actions: output exactly one line.\n"
-    "- For multiple actions: output multiple lines (e.g., for checkboxes).\n"
+    "- Output exactly one line.\n"
     "- No explanations, no preamble, no lists, no code fences.\n"
-    "- Each line must match one of the allowed action formats."
+    "- The line must match one of the allowed action formats."
 )
 ACTION_FORMAT = (
     "Actions (match exactly):\n"
