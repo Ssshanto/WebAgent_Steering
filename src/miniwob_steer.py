@@ -159,11 +159,6 @@ PROMPT_CONFIGS = {
     },
 }
 
-# Default
-PROMPT_TYPE = "accuracy"
-POS_INSTR = PROMPT_CONFIGS[PROMPT_TYPE]["pos"]
-NEG_INSTR = PROMPT_CONFIGS[PROMPT_TYPE]["neg"]
-
 # =============================================================================
 # STEERED MODEL
 # =============================================================================
@@ -171,7 +166,7 @@ NEG_INSTR = PROMPT_CONFIGS[PROMPT_TYPE]["neg"]
 class SteeredModel:
     """LLM with activation steering capability."""
 
-    def __init__(self, model_name, layer_idx, coeff, vector_method="response"):
+    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False, vector_method="response"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
         dtype = torch.float16 if self.device == "cuda" else torch.float32
@@ -180,6 +175,7 @@ class SteeredModel:
         self.model.eval()
         self.layer_idx = layer_idx
         self.coeff = coeff
+        self.steer_all_layers = steer_all_layers
         self.vector_method = vector_method
         self.vector = None
         self._vector_cache = {}
@@ -354,9 +350,72 @@ def step_env(env, actions):
 # STEERING VECTOR COMPUTATION
 # =============================================================================
 
-def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
+def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
     """Compute steering vector from contrastive prompts."""
+    
+    if prompt_type == "combined":
+        print("Computing Combined Vector (format_accuracy + composite_1)...")
+        vec_a_sum = None
+        vec_b_sum = None
+        
+        pbar = tqdm(total=steps, desc="Computing combined vector")
+        steps_per_task = max(1, steps // len(tasks))
+
+        for task in tasks:
+            env = gym.make(f"miniwob/{task}-v1")
+            for _ in range(steps_per_task):
+                seed = random.randint(0, 2**31 - 1)
+                obs, _ = env.reset(seed=seed)
+                prompt = build_prompt(obs, max_elems)
+                
+                # Vector A: format_accuracy
+                pos_a = f"{prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
+                neg_a = f"{prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
+                
+                if model.vector_method == "prompt":
+                    diff_a = model._prompt_activation(pos_a) - model._prompt_activation(neg_a)
+                else:
+                    pos_text = model.generate(pos_a, steer=False, max_new_tokens=max_new_tokens)
+                    neg_text = model.generate(neg_a, steer=False, max_new_tokens=max_new_tokens)
+                    diff_a = model._last_token_state(pos_text) - model._last_token_state(neg_text)
+                
+                vec_a_sum = diff_a if vec_a_sum is None else vec_a_sum + diff_a
+                
+                # Vector B: composite_1
+                pos_b = f"{prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
+                neg_b = f"{prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
+                
+                if model.vector_method == "prompt":
+                    diff_b = model._prompt_activation(pos_b) - model._prompt_activation(neg_b)
+                else:
+                    pos_text = model.generate(pos_b, steer=False, max_new_tokens=max_new_tokens)
+                    neg_text = model.generate(neg_b, steer=False, max_new_tokens=max_new_tokens)
+                    diff_b = model._last_token_state(pos_text) - model._last_token_state(neg_b)
+                
+                vec_b_sum = diff_b if vec_b_sum is None else vec_b_sum + diff_b
+                
+                pbar.update(1)
+                if pbar.n >= steps: break
+            env.close()
+            if pbar.n >= steps: break
+        pbar.close()
+        
+        vec_a = vec_a_sum / max(1, pbar.n)
+        vec_b = vec_b_sum / max(1, pbar.n)
+        
+        vec_a = vec_a / np.linalg.norm(vec_a)
+        vec_b = vec_b / np.linalg.norm(vec_b)
+        
+        combined = vec_a + vec_b
+        combined = combined / np.linalg.norm(combined)
+        model.set_vector(combined)
+        return
+
+    # Standard single-prompt logic
     totals = None
+    pos_instr = PROMPT_CONFIGS[prompt_type]["pos"]
+    neg_instr = PROMPT_CONFIGS[prompt_type]["neg"]
+    
     pbar = tqdm(total=steps, desc="Computing steering vector")
     steps_per_task = max(1, steps // len(tasks))
 
@@ -366,8 +425,8 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens):
             seed = random.randint(0, 2**31 - 1)
             obs, _ = env.reset(seed=seed)
             prompt = build_prompt(obs, max_elems)
-            pos = f"{prompt}\n{POS_INSTR}"
-            neg = f"{prompt}\n{NEG_INSTR}"
+            pos = f"{prompt}\n{pos_instr}"
+            neg = f"{prompt}\n{neg_instr}"
 
             if model.vector_method == "prompt":
                 diff = model._prompt_activation(pos) - model._prompt_activation(neg)
@@ -490,7 +549,7 @@ def main():
     parser.add_argument("--model", choices=MODEL_MAP.keys(), default="0.5b")
     parser.add_argument("--layer", type=int, default=14, help="Intervention layer")
     parser.add_argument("--coeff", type=float, default=4.0, help="Steering coefficient")
-    parser.add_argument("--prompt-type", choices=PROMPT_CONFIGS.keys(), default="accuracy")
+    parser.add_argument("--prompt-type", choices=list(PROMPT_CONFIGS.keys()) + ["combined"], default="accuracy")
     parser.add_argument("--vector-method", choices=["response", "prompt"], default="response")
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--eval-steps", type=int, default=400)
@@ -499,11 +558,6 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--base-only", action="store_true", help="Evaluate baseline only")
     args = parser.parse_args()
-
-    # Set steering prompts
-    global POS_INSTR, NEG_INSTR
-    POS_INSTR = PROMPT_CONFIGS[args.prompt_type]["pos"]
-    NEG_INSTR = PROMPT_CONFIGS[args.prompt_type]["neg"]
 
     # Set seeds
     random.seed(args.seed)
@@ -532,7 +586,7 @@ def main():
 
     # Compute steering vector
     if not args.base_only:
-        compute_vector(model, tasks, args.train_steps, 80, 80)
+        compute_vector(model, tasks, args.train_steps, 80, 80, args.prompt_type)
 
     # Evaluate
     results = evaluate(model, tasks, args.eval_steps, 80, 80, args.out, args.base_only)
