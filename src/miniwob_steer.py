@@ -545,6 +545,42 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only
 # =============================================================================
 
 def main():
+    # Monkeypatch MiniWoB to use the correct Chrome binary
+    from miniwob.selenium_instance import SeleniumInstance
+    from selenium import webdriver
+    
+    def patched_create_driver(self):
+        assert not hasattr(self, "driver"), f"Instance {self.index} already has a driver"
+        options = webdriver.ChromeOptions()
+        options.binary_location = "/usr/bin/chromium-browser"
+        options.add_argument(f"window-size={self.window_width},{self.window_height}")
+        if self.headless:
+            options.add_argument("headless")
+            options.add_argument("disable-gpu")
+            options.add_argument("no-sandbox")
+        else:
+            options.add_argument("app=" + self.url)
+        self.driver = webdriver.Chrome(options=options)
+        self.driver.implicitly_wait(5)
+        if self.headless:
+            self.driver.get(self.url)
+        
+        from selenium.webdriver.support.wait import WebDriverWait
+        from selenium.webdriver.support import expected_conditions as EC
+        from selenium.webdriver.common.by import By
+        try:
+            WebDriverWait(self.driver, 5).until(
+                EC.element_to_be_clickable((By.ID, self.SYNC_SCREEN_ID))
+            )
+        except Exception as e:
+            import logging
+            logging.error("Page did not load properly. Wrong URL?")
+            raise e
+        self.inner_width, self.inner_height = self.driver.execute_script(
+            "return [window.innerWidth, window.innerHeight];"
+        )
+    SeleniumInstance.create_driver = patched_create_driver
+
     parser = argparse.ArgumentParser(description="Web Agent Steering Experiment")
     parser.add_argument("--model", choices=MODEL_MAP.keys(), default="0.5b")
     parser.add_argument("--layer", type=int, default=14, help="Intervention layer")
