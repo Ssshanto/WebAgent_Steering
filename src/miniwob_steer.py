@@ -298,6 +298,7 @@ class SteeredModel:
         self.vector_method = vector_method
         self.vector = None
         self._vector_cache = {}
+        self.is_vlm = False
 
     def _last_token_state(self, text):
         """Extract activation from last token of text."""
@@ -579,6 +580,44 @@ def step_env(env, actions):
 # STEERING VECTOR COMPUTATION
 # =============================================================================
 
+def _get_prompt_and_image(model, obs, env, max_elems):
+    """Get prompt and optionally image based on model type."""
+    if hasattr(model, 'is_vlm') and model.is_vlm:
+        # VLM mode: use screenshot with SoM annotation
+        screenshot = capture_screenshot(env)
+        elements = extract_element_positions(obs["dom_elements"])
+        annotated_image = annotate_screenshot_with_marks(screenshot, elements)
+        prompt = build_vlm_prompt(obs)
+        return prompt, annotated_image
+    else:
+        # Text mode: use DOM HTML
+        prompt = build_prompt(obs, max_elems)
+        return prompt, None
+
+
+def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
+    """Compute activation difference for a contrastive pair."""
+    if model.vector_method == "prompt":
+        # Standard CAA: Extract from prompt
+        if image is not None:
+            diff = model._prompt_activation(pos, image=image) - model._prompt_activation(neg, image=image)
+        else:
+            diff = model._prompt_activation(pos) - model._prompt_activation(neg)
+    else:
+        # Non-standard: Extract from generated response
+        if image is not None:
+            pos_text = model.generate(pos, steer=False, max_new_tokens=max_new_tokens, image=image)
+            neg_text = model.generate(neg, steer=False, max_new_tokens=max_new_tokens, image=image)
+        else:
+            pos_text = model.generate(pos, steer=False, max_new_tokens=max_new_tokens)
+            neg_text = model.generate(neg, steer=False, max_new_tokens=max_new_tokens)
+        
+        # For VLM, _last_token_state doesn't need image
+        diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
+    
+    return diff
+
+
 def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
     """Compute steering vector from contrastive prompts."""
     
@@ -595,32 +634,20 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
             for _ in range(steps_per_task):
                 seed = random.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed)
-                prompt = build_prompt(obs, max_elems)
+                
+                # Get prompt and image based on model type
+                base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
                 
                 # Vector A: format_accuracy
-                pos_a = f"{prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
-                neg_a = f"{prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
-                
-                if model.vector_method == "prompt":
-                    diff_a = model._prompt_activation(pos_a) - model._prompt_activation(neg_a)
-                else:
-                    pos_text = model.generate(pos_a, steer=False, max_new_tokens=max_new_tokens)
-                    neg_text = model.generate(neg_a, steer=False, max_new_tokens=max_new_tokens)
-                    diff_a = model._last_token_state(pos_text) - model._last_token_state(neg_text)
-                
+                pos_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
+                neg_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
+                diff_a = _compute_activation_diff(model, pos_a, neg_a, max_new_tokens, image)
                 vec_a_sum = diff_a if vec_a_sum is None else vec_a_sum + diff_a
                 
                 # Vector B: composite_1
-                pos_b = f"{prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
-                neg_b = f"{prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
-                
-                if model.vector_method == "prompt":
-                    diff_b = model._prompt_activation(pos_b) - model._prompt_activation(neg_b)
-                else:
-                    pos_text = model.generate(pos_b, steer=False, max_new_tokens=max_new_tokens)
-                    neg_text = model.generate(neg_b, steer=False, max_new_tokens=max_new_tokens)
-                    diff_b = model._last_token_state(pos_text) - model._last_token_state(neg_b)
-                
+                pos_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
+                neg_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
+                diff_b = _compute_activation_diff(model, pos_b, neg_b, max_new_tokens, image)
                 vec_b_sum = diff_b if vec_b_sum is None else vec_b_sum + diff_b
                 
                 pbar.update(1)
@@ -653,17 +680,14 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
         for _ in range(steps_per_task):
             seed = random.randint(0, 2**31 - 1)
             obs, _ = env.reset(seed=seed)
-            prompt = build_prompt(obs, max_elems)
-            pos = f"{prompt}\n{pos_instr}"
-            neg = f"{prompt}\n{neg_instr}"
+            
+            # Get prompt and image based on model type
+            base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
+            pos = f"{base_prompt}\n{pos_instr}"
+            neg = f"{base_prompt}\n{neg_instr}"
 
-            if model.vector_method == "prompt":
-                diff = model._prompt_activation(pos) - model._prompt_activation(neg)
-            else:
-                pos_text = model.generate(pos, steer=False, max_new_tokens=max_new_tokens)
-                neg_text = model.generate(neg, steer=False, max_new_tokens=max_new_tokens)
-                diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
-
+            # Compute activation difference
+            diff = _compute_activation_diff(model, pos, neg, max_new_tokens, image)
             totals = diff if totals is None else totals + diff
             pbar.update(1)
 
@@ -701,10 +725,16 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only
             for _ in range(steps_per_task):
                 seed = random.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed)
-                prompt = build_prompt(obs, max_elems)
+                
+                # Get prompt and image based on model type
+                prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
 
                 # Baseline
-                base_out = model.generate(prompt, steer=False, max_new_tokens=max_new_tokens)
+                if image is not None:
+                    base_out = model.generate(prompt, steer=False, max_new_tokens=max_new_tokens, image=image)
+                else:
+                    base_out = model.generate(prompt, steer=False, max_new_tokens=max_new_tokens)
+                    
                 base_action = parse_action(base_out)
                 base_reward, _ = step_env(env, base_action)
                 base_success = base_reward > 0
@@ -721,9 +751,15 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only
                 }
 
                 if not base_only:
-                    # Steered
+                    # Steered - reset and get prompt/image again
                     obs, _ = env.reset(seed=seed)
-                    steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens)
+                    prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
+                    
+                    if image is not None:
+                        steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens, image=image)
+                    else:
+                        steer_out = model.generate(prompt, steer=True, max_new_tokens=max_new_tokens)
+                        
                     steer_action = parse_action(steer_out)
                     steer_reward, _ = step_env(env, steer_action)
                     steer_success = steer_reward > 0

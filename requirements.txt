@@ -3,4 +3,5 @@ transformers
 miniwob
 tqdm
 pillow
+numpy
 qwen-vl-utils
