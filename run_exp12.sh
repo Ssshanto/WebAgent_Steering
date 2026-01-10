@@ -21,9 +21,11 @@ SEED=0
 
 # Model list (ordered by size for memory efficiency)
 TEXT_MODELS=(
+    "llama-1b"      # 1B - fastest
     "qwen-1.5b"     # 1.5B
     "smollm-1.7b"   # 1.7B
     "gemma-2b"      # 2B
+    "llama-3b"      # 3B
     "phi-3.8b"      # 3.8B - largest text model
 )
 
