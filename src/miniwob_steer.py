@@ -6,9 +6,14 @@ Steering LLM web agents via Contrastive Activation Addition (CAA).
 This script implements zero-shot steering for MiniWob++ benchmark tasks.
 The hypothesis: steering can improve action-space understanding without
 task-specific fine-tuning.
+
+Supports:
+- Text-only LLMs (Qwen, Llama, Gemma, Phi, SmolLM)
+- Vision-Language Models (Qwen-VL) with Set-of-Marks annotation
 """
 
 import argparse
+import io
 import json
 import random
 import re
@@ -18,6 +23,7 @@ import miniwob
 import numpy as np
 import torch
 from miniwob.action import ActionTypes
+from PIL import Image, ImageDraw, ImageFont
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -26,9 +32,122 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 # =============================================================================
 
 MODEL_MAP = {
+    # Qwen family (original)
     "0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
     "3b": "Qwen/Qwen2.5-3B-Instruct",
+    # Qwen family (extended)
+    "qwen-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
+    # Llama family
+    "llama-1b": "meta-llama/Llama-3.2-1B-Instruct",
+    "llama-3b": "meta-llama/Llama-3.2-3B-Instruct",
+    # Other families
+    "gemma-2b": "google/gemma-2-2b-it",
+    "phi-3.8b": "microsoft/Phi-3.5-mini-instruct",
+    "smollm-1.7b": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+    # VLM
+    "qwen-vl-3b": "Qwen/Qwen2.5-VL-3B-Instruct",
 }
+
+# Layer depths for 50% intervention point (mid-layer steering)
+LAYER_MAP = {
+    "0.5b": 11,        # 24 layers → L11 (46%)
+    "3b": 18,          # 36 layers → L18 (50%)
+    "qwen-1.5b": 14,   # 28 layers → L14 (50%)
+    "llama-1b": 8,     # 16 layers → L8 (50%)
+    "llama-3b": 14,    # 28 layers → L14 (50%)
+    "gemma-2b": 13,    # 26 layers → L13 (50%)
+    "phi-3.8b": 16,    # 32 layers → L16 (50%)
+    "smollm-1.7b": 12, # 24 layers → L12 (50%)
+    "qwen-vl-3b": 18,  # 36 LLM layers → L18 (50% of LLM backbone)
+}
+
+# Models that require VLM mode
+VLM_MODELS = {"qwen-vl-3b"}
+
+# =============================================================================
+# VLM HELPERS
+# =============================================================================
+
+def get_layer(model_key, layer_arg):
+    """Get layer index, supporting 'auto' for automatic selection."""
+    if layer_arg == "auto":
+        return LAYER_MAP.get(model_key, 14)
+    return int(layer_arg)
+
+
+def capture_screenshot(env):
+    """Capture screenshot from MiniWob environment."""
+    driver = env.unwrapped.instance.driver
+    png_bytes = driver.get_screenshot_as_png()
+    img = Image.open(io.BytesIO(png_bytes))
+    return img
+
+
+def extract_element_positions(dom_elements):
+    """Extract bounding boxes from DOM elements for SoM overlay."""
+    positions = []
+    for el in dom_elements:
+        ref = el.get("ref")
+        if ref is None:
+            continue
+        # MiniWob provides bounding info via JavaScript execution
+        # For now, use approximate positions from DOM structure
+        # Real implementation would use driver.execute_script to get boundingClientRect
+        left = el.get("left", 0)
+        top = el.get("top", 0) 
+        width = el.get("width", 50)
+        height = el.get("height", 20)
+        positions.append({
+            "ref": ref,
+            "x": left,
+            "y": top,
+            "w": width,
+            "h": height,
+            "text": (el.get("text") or "")[:20],
+        })
+    return positions
+
+
+def annotate_screenshot_with_marks(img, elements):
+    """Overlay element IDs on screenshot (Set-of-Marks annotation)."""
+    draw = ImageDraw.Draw(img)
+    
+    # Try to load font, fall back to default
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
+    except (IOError, OSError):
+        font = ImageFont.load_default()
+    
+    for elem in elements:
+        x, y, w, h = elem["x"], elem["y"], elem["w"], elem["h"]
+        ref = elem["ref"]
+        
+        # Draw bounding box
+        draw.rectangle([x, y, x + w, y + h], outline="red", width=2)
+        
+        # Draw reference label
+        label = f"[{ref}]"
+        draw.rectangle([x, y - 15, x + 25, y], fill="red")
+        draw.text((x + 2, y - 14), label, fill="white", font=font)
+    
+    return img
+
+
+def load_vlm(model_id):
+    """Load VLM model and processor."""
+    from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+    
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model_id,
+        torch_dtype=dtype,
+        device_map="auto" if device == "cuda" else None,
+    )
+    processor = AutoProcessor.from_pretrained(model_id)
+    
+    return model, processor
 
 # =============================================================================
 # TASK CONFIGURATION
@@ -241,6 +360,111 @@ class SteeredModel:
         generated_tokens = out[0][input_length:]
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
+
+class SteeredVLM:
+    """Vision-Language Model with activation steering on LLM backbone."""
+
+    def __init__(self, model_name, layer_idx, coeff, vector_method="response"):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model, self.processor = load_vlm(model_name)
+        self.layer_idx = layer_idx
+        self.coeff = coeff
+        self.vector_method = vector_method
+        self.vector = None
+        self._vector_cache = {}
+        self.is_vlm = True
+
+    def _get_llm_layers(self):
+        """Get LLM backbone layers for steering (skip ViT encoder)."""
+        # Qwen2.5-VL architecture: model.model.layers contains LLM layers
+        return self.model.model.layers
+
+    def _prompt_activation(self, prompt, image=None):
+        """Extract activation from multimodal prompt before generation."""
+        if image is not None:
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt}
+                ]
+            }]
+        else:
+            messages = [{"role": "user", "content": prompt}]
+        
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        
+        if image is not None:
+            inputs = self.processor(text=[text], images=[image], return_tensors="pt")
+        else:
+            inputs = self.processor(text=[text], return_tensors="pt")
+        
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        
+        with torch.no_grad():
+            out = self.model(**inputs, output_hidden_states=True)
+        
+        return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
+
+    def set_vector(self, vec):
+        """Set the steering vector."""
+        self.vector = torch.tensor(vec, dtype=torch.float32, device="cpu")
+        self._vector_cache.clear()
+
+    def generate(self, prompt, steer=False, max_new_tokens=80, image=None):
+        """Generate text from multimodal input, optionally with steering."""
+        if image is not None:
+            messages = [{
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image},
+                    {"type": "text", "text": prompt}
+                ]
+            }]
+        else:
+            messages = [{"role": "user", "content": prompt}]
+        
+        text = self.processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        
+        if image is not None:
+            inputs = self.processor(text=[text], images=[image], return_tensors="pt")
+        else:
+            inputs = self.processor(text=[text], return_tensors="pt")
+        
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        input_length = inputs["input_ids"].shape[1]
+
+        def hook(_module, _input, output):
+            if not steer or self.vector is None:
+                return output
+            if torch.is_tensor(output):
+                target = output
+            elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
+                target = output[0]
+            else:
+                return output
+
+            vec = self._vector_cache.get(target.device)
+            if vec is None:
+                vec = self.vector.to(device=target.device, dtype=target.dtype)
+                self._vector_cache[target.device] = vec
+
+            if target.dim() == 3:
+                target[:, -1, :] += self.coeff * vec
+            elif target.dim() == 2:
+                target[-1, :] += self.coeff * vec
+            return output
+
+        # Hook into LLM backbone layers only (not ViT)
+        llm_layers = self._get_llm_layers()
+        handle = llm_layers[self.layer_idx].register_forward_hook(hook)
+        
+        out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        handle.remove()
+
+        generated_tokens = out[0][input_length:]
+        return self.processor.decode(generated_tokens, skip_special_tokens=True).strip()
+
 # =============================================================================
 # DOM PROCESSING
 # =============================================================================
@@ -274,6 +498,11 @@ def build_prompt(obs, max_elems=80):
     """Build prompt from observation."""
     dom_text = dom_to_html(obs["dom_elements"], max_elems)
     return f"{SYSTEM_PROMPT}\n\nTask: {obs['utterance']}\n\nHTML:\n{dom_text}\n\n{ACTION_FORMAT}"
+
+
+def build_vlm_prompt(obs):
+    """Build prompt for VLM (image-based) mode."""
+    return f"{SYSTEM_PROMPT}\n\nTask: {obs['utterance']}\n\nThe screenshot shows the webpage with elements marked by [ref] numbers.\n\n{ACTION_FORMAT}"
 
 # =============================================================================
 # ACTION PARSING
@@ -583,8 +812,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Web Agent Steering Experiment")
     parser.add_argument("--model", choices=MODEL_MAP.keys(), default="0.5b")
-    parser.add_argument("--layer", type=int, default=14, help="Intervention layer")
-    parser.add_argument("--coeff", type=float, default=4.0, help="Steering coefficient")
+    parser.add_argument("--layer", default="auto", help="Intervention layer (int or 'auto')")
+    parser.add_argument("--coeff", type=float, default=3.0, help="Steering coefficient")
     parser.add_argument("--prompt-type", choices=list(PROMPT_CONFIGS.keys()) + ["combined"], default="accuracy")
     parser.add_argument("--vector-method", choices=["response", "prompt"], default="response")
     parser.add_argument("--train-steps", type=int, default=200)
@@ -593,7 +822,14 @@ def main():
     parser.add_argument("--out", default="results.jsonl")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--base-only", action="store_true", help="Evaluate baseline only")
+    parser.add_argument("--vlm", action="store_true", help="Enable VLM mode (screenshot + SoM)")
     args = parser.parse_args()
+
+    # Resolve layer
+    layer_idx = get_layer(args.model, args.layer)
+    
+    # Check VLM mode
+    is_vlm = args.vlm or args.model in VLM_MODELS
 
     # Set seeds
     random.seed(args.seed)
@@ -610,15 +846,26 @@ def main():
         tasks = [t.strip() for t in args.tasks.split(",")]
 
     # Initialize model
-    print(f"Model: {args.model}, Layer: {args.layer}, Coeff: {args.coeff}")
+    print(f"Model: {args.model} ({MODEL_MAP[args.model]})")
+    print(f"Layer: {layer_idx} ({'auto' if args.layer == 'auto' else 'manual'})")
+    print(f"Coeff: {args.coeff}")
     print(f"Prompt type: {args.prompt_type}, Vector method: {args.vector_method}")
+    print(f"VLM mode: {is_vlm}")
 
-    model = SteeredModel(
-        MODEL_MAP[args.model],
-        layer_idx=args.layer,
-        coeff=args.coeff,
-        vector_method=args.vector_method,
-    )
+    if is_vlm:
+        model = SteeredVLM(
+            MODEL_MAP[args.model],
+            layer_idx=layer_idx,
+            coeff=args.coeff,
+            vector_method=args.vector_method,
+        )
+    else:
+        model = SteeredModel(
+            MODEL_MAP[args.model],
+            layer_idx=layer_idx,
+            coeff=args.coeff,
+            vector_method=args.vector_method,
+        )
 
     # Compute steering vector
     if not args.base_only:

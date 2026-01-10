@@ -554,6 +554,53 @@ All experiments that produce *different* results are worth documenting - they gu
 
 ---
 
+## TODO: Multi-Model Scaling (Exp 12)
+
+**Goal**: Prove steering generalizes across model families, not just Qwen 0.5B.
+
+### Models to Test
+
+**Text-Only Models (6)**
+| Model | HuggingFace ID | Params | Layers | 50% Layer |
+|-------|----------------|--------|--------|-----------|
+| Qwen2.5-1.5B | `Qwen/Qwen2.5-1.5B-Instruct` | 1.5B | 28 | L14 |
+| Llama-3.2-1B | `meta-llama/Llama-3.2-1B-Instruct` | 1B | 16 | L8 |
+| Llama-3.2-3B | `meta-llama/Llama-3.2-3B-Instruct` | 3B | 28 | L14 |
+| Gemma-2-2B | `google/gemma-2-2b-it` | 2B | 26 | L13 |
+| Phi-3.5-mini | `microsoft/Phi-3.5-mini-instruct` | 3.8B | 32 | L16 |
+| SmolLM2-1.7B | `HuggingFaceTB/SmolLM2-1.7B-Instruct` | 1.7B | 24 | L12 |
+
+**Vision-Language Model (1)**
+| Model | HuggingFace ID | Params | LLM Layers | 50% Layer |
+|-------|----------------|--------|------------|-----------|
+| Qwen2.5-VL-3B | `Qwen/Qwen2.5-VL-3B-Instruct` | 3.8B | 36 | L18 |
+
+### Fixed Hyperparameters (No Grid Search)
+Based on Exp 11 findings, use single best config:
+- **Layer**: 50% of model depth
+- **Coefficient**: α = 3.0
+- **Prompt**: `accuracy`
+- **Vector Method**: `response`
+
+### Protocol
+1. **Baseline**: `--base-only` to measure parse failure rate (~30 min/model)
+2. **Steering**: Single config with above hyperparameters (~45 min/model)
+3. **VLM**: Screenshot-based input with Set-of-Marks annotation
+4. **Success**: Δ > +5% accuracy improvement
+
+### Time Budget: ~10 hours
+- 6 text models × 1.25 hr = 7.5 hr
+- 1 VLM × 1.5 hr = 1.5 hr
+- Buffer = 1 hr
+
+### VLM Implementation Notes
+- Input: Screenshot with element IDs overlaid (Set-of-Marks style)
+- Steering targets LLM backbone layers, not ViT encoder
+- MiniWob provides screenshots via Selenium `get_screenshot_as_png()`
+- Reference: VisualWebArena (Koh et al., 2024), ScreenAgent (IJCAI-24)
+
+---
+
 ## References
 
 **Representation Engineering - Surveys:**

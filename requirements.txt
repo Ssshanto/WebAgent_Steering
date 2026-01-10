@@ -2,3 +2,5 @@ torch
 transformers
 miniwob
 tqdm
+pillow
+qwen-vl-utils
