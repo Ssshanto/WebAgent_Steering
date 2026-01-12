@@ -607,17 +607,21 @@ Based on Exp 11 findings, use single best config:
 | Model | Baseline Acc | Steered Acc | Delta | Status |
 | :--- | :--- | :--- | :--- | :--- |
 | **Gemma 2B** | 2.5% | 1.5% | -1.0% | **Negative** (Model too weak) |
-| **Llama 1B** | 0.0% | 0.2% | +0.2% | **Null** (Fails all tasks) |
+| **Llama 1B** | 0.0% | 4.2% | +4.2% | **Slight Positive** (Format shift) |
 | **Llama 3B** | 50.5% | 51.5% | **+1.0%** | **Slight Positive** |
 | **Phi 3.5** | 56.0% | 55.8% | -0.2% | **Null** (Strong baseline) |
 | **Qwen 1.5B**| 21.8% | 20.8% | -1.0% | **Negative** |
 | **SmolLM 1.7B**| 2.8% | 2.8% | 0.0% | **Null** |
 
 **Llama 1B Failure Analysis:**
-- **Issue:** Consistent 0% accuracy across baseline and steered runs.
-- **Root Cause:** Excessive hallucination and format non-compliance. The model generates repetitive, pipe-delimited sequences (e.g., `click 2 | click 3 | select 2 1`) instead of single actions.
-- **Impact:** The parser fails to extract any valid action.
-- **Hypothesis:** Llama 1B Instruct may require specific system prompt tuning or few-shot examples to adhere to the strict "one line, no explanation" constraint, which zero-shot steering alone could not fix.
+- **Issue:** Consistent near-0% accuracy.
+- **Root Cause:** Excessive hallucination and format non-compliance. The model generates repetitive, pipe-delimited sequences (e.g., `click 2 | click 3 | select 2 1`) mimicking training logs instead of single actions.
+- **Steering Mechanism:** At **Layer 9 / Alpha 4.0**, steering did **not** stop the hallucination but **changed the delimiter**. The model shifted from pipe-delimited lines to newline-separated actions:
+  - *Base:* `click 2 | click 3 | ...` (Parser fails)
+  - *Steered:* `click 2\nclick 3\n...` (Parser succeeds on first line)
+- **Result:** This formatting shift allowed the parser to extract the first action. In **4.2%** of cases, this first hallucinated action happened to be correct, leading to "success". This confirms steering modified the *style* of generation but likely not the *reasoning*.
+
+**Qwen 1.5B Analysis:**
 
 ---
 
