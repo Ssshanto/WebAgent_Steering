@@ -1,58 +1,74 @@
 #!/bin/bash
-# Experiment 11: Optimized Prompt & Layer Sweep
-# Testing the "Gold Set" of 7 prompts across Layers {11..15} and Alphas {1..4}
+# Llama 1B Accuracy Sweep (Layer/Alpha)
+# Target: meta-llama/Llama-3.2-1B-Instruct
+# Prompt: accuracy
+# Layers: 6-10 (Centered on 8)
+# Alphas: 1.0, 2.0, 3.0, 4.0
 
 set -e
 
-MODEL_SIZE="0.5b"
-TASKS="all"
+MODEL="llama-1b"
+PROMPT_TYPE="accuracy"
+VECTOR_METHOD="response"
 TRAIN_STEPS=200
 EVAL_STEPS=400
-VECTOR_METHOD="response"
 SEED=0
 
-# The Pruned "Gold Set"
-PROMPTS="format_accuracy accuracy deliberation composite_1 confidence dom_reading verification"
-
-LAYERS=(11 12 13 14 15)
+# Sweep Parameters
+LAYERS=(6 7 8 9 10)
 ALPHAS=(1.0 2.0 3.0 4.0)
 
-RESULTS_DIR="results/exp11_gold_sweep"
+RESULTS_DIR="results/llama1b_accuracy_sweep"
 mkdir -p $RESULTS_DIR
 
 echo "========================================"
-echo "Experiment 11: Optimized Sweep"
+echo "Llama 1B Accuracy Sweep"
 echo "========================================"
-echo "Prompts: $PROMPTS"
+echo "Model: $MODEL"
+echo "Prompt: $PROMPT_TYPE"
 echo "Layers: ${LAYERS[*]}"
 echo "Alphas: ${ALPHAS[*]}"
+echo "Output: $RESULTS_DIR"
 echo "========================================"
 
+# 1. Run Baseline (Once)
+BASE_FILE="$RESULTS_DIR/${MODEL}_baseline.jsonl"
+if [ ! -f "$BASE_FILE" ]; then
+    echo ""
+    echo ">>> Running Baseline"
+    python src/miniwob_steer.py \
+        --model "$MODEL" \
+        --layer 8 \
+        --base-only \
+        --eval-steps $EVAL_STEPS \
+        --seed $SEED \
+        --out "$BASE_FILE"
+else
+    echo ">>> Baseline exists: $BASE_FILE"
+fi
+
+# 2. Run Sweep
 for LAYER in "${LAYERS[@]}"; do
     for ALPHA in "${ALPHAS[@]}"; do
-        echo ""
-        echo ">>> Testing L$LAYER, a$ALPHA"
+        OUT_FILE="$RESULTS_DIR/${MODEL}_${PROMPT_TYPE}_L${LAYER}_a${ALPHA}.jsonl"
         
-        for PROMPT in $PROMPTS; do
-            OUT_FILE="$RESULTS_DIR/${PROMPT}_L${LAYER}_a${ALPHA}.jsonl"
-            
-            if [ -f "$OUT_FILE" ]; then
-                echo "  Skipping $PROMPT (exists)"
-                continue
-            fi
-            
-            echo "  Running: $PROMPT"
-            python src/miniwob_steer.py \
-                --model $MODEL_SIZE \
-                --layer $LAYER \
-                --coeff $ALPHA \
-                --prompt-type $PROMPT \
-                --vector-method $VECTOR_METHOD \
-                --train-steps $TRAIN_STEPS \
-                --eval-steps $EVAL_STEPS \
-                --seed $SEED \
-                --out "$OUT_FILE"
-        done
+        if [ -f "$OUT_FILE" ]; then
+            echo "  Skipping L${LAYER} a${ALPHA} (exists)"
+            continue
+        fi
+        
+        echo ""
+        echo ">>> Running: Layer $LAYER, Alpha $ALPHA"
+        python src/miniwob_steer.py \
+            --model "$MODEL" \
+            --layer $LAYER \
+            --coeff $ALPHA \
+            --prompt-type $PROMPT_TYPE \
+            --vector-method $VECTOR_METHOD \
+            --train-steps $TRAIN_STEPS \
+            --eval-steps $EVAL_STEPS \
+            --seed $SEED \
+            --out "$OUT_FILE"
     done
 done
 
