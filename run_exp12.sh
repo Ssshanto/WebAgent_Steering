@@ -1,8 +1,7 @@
 #!/bin/bash
 # Experiment 12: Grid Search & VLM Validation
 #
-# 1. Grid Search on Llama 3.2 3B (Layers 12-16, Alphas 1,2,3)
-# 2. Grid Search on Qwen-VL 3B (Layers 16-20, Alphas 1,2,3) - Center is L18
+# 1. Grid Search on Llama 3.2 1B (Layers 6-10, Alphas 1,2,3)
 
 set -e
 
@@ -74,10 +73,7 @@ run_grid() {
     done
 }
 
-# Run Llama 3B (Text) - 28 layers -> Center 14
-run_grid "llama-3b" 14 "false"
-
-# Run Qwen-VL 3B (VLM) - 36 layers (LLM backbone) -> Center 18
-run_grid "qwen-vl-3b" 18 "true"
+# Run Llama 1B (Text) - 16 layers -> Center 8
+run_grid "llama-1b" 8 "false"
 
 echo "Grid Search Complete."
