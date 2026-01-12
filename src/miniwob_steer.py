@@ -314,19 +314,21 @@ class SteeredModel:
         self.coeff = coeff
         self.steer_all_layers = steer_all_layers
         self.vector_method = vector_method
-        self.vector = None
+        self.vector = None  # Active steering vector for current layer
+        self.vectors = {}   # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
         self.is_vlm = False
 
     def _last_token_state(self, text):
-        """Extract activation from last token of text."""
+        """Extract activation from last token of text for all layers."""
         inputs = self.tokenizer(text, return_tensors="pt").to(self.device)
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
-        return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
+        # Return all hidden states (tuple of tensors, one per layer)
+        return out.hidden_states
 
     def _prompt_activation(self, prompt):
-        """Extract activation from prompt before generation (standard CAA)."""
+        """Extract activation from prompt before generation for all layers."""
         messages = [{"role": "user", "content": prompt}]
         formatted = self.tokenizer.apply_chat_template(
             messages, tokenize=False, add_generation_prompt=True
@@ -334,11 +336,29 @@ class SteeredModel:
         inputs = self.tokenizer(formatted, return_tensors="pt").to(self.device)
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
-        return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
+        # Return all hidden states (tuple of tensors, one per layer)
+        return out.hidden_states
 
-    def set_vector(self, vec):
-        """Set the steering vector."""
-        self.vector = torch.tensor(vec, dtype=torch.float32, device="cpu")
+    def set_vector(self, vec, layer_idx=None):
+        """Set the steering vector(s).
+        
+        Args:
+            vec: Either a single vector (tensor/array) or a dict mapping layer_idx -> vector
+            layer_idx: If vec is a single vector, which layer it's for (defaults to self.layer_idx)
+        """
+        if isinstance(vec, dict):
+            # Setting multiple vectors at once
+            self.vectors = {k: torch.tensor(v, dtype=torch.float32, device="cpu") for k, v in vec.items()}
+            # Set active vector to the target layer if available
+            if self.layer_idx in self.vectors:
+                self.vector = self.vectors[self.layer_idx]
+        else:
+            # Setting a single vector
+            target_layer = layer_idx if layer_idx is not None else self.layer_idx
+            tensor_vec = torch.tensor(vec, dtype=torch.float32, device="cpu")
+            self.vectors[target_layer] = tensor_vec
+            if target_layer == self.layer_idx:
+                self.vector = tensor_vec
         self._vector_cache.clear()
 
     def generate(self, prompt, steer=False, max_new_tokens=80):
@@ -389,7 +409,8 @@ class SteeredVLM:
         self.layer_idx = layer_idx
         self.coeff = coeff
         self.vector_method = vector_method
-        self.vector = None
+        self.vector = None  # Active steering vector for current layer
+        self.vectors = {}   # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
         self.is_vlm = True
 
@@ -398,8 +419,17 @@ class SteeredVLM:
         # Qwen2.5-VL architecture: model.model.layers contains LLM layers
         return self.model.model.layers
 
+    def _last_token_state(self, text):
+        """Extract activation from last token of text for all layers."""
+        inputs = self.processor(text=[text], return_tensors="pt")
+        inputs = {k: v.to(self.device) for k, v in inputs.items()}
+        with torch.no_grad():
+            out = self.model(**inputs, output_hidden_states=True)
+        # Return all hidden states (tuple of tensors, one per layer)
+        return out.hidden_states
+
     def _prompt_activation(self, prompt, image=None):
-        """Extract activation from multimodal prompt before generation."""
+        """Extract activation from multimodal prompt before generation for all layers."""
         if image is not None:
             messages = [{
                 "role": "user",
@@ -423,11 +453,29 @@ class SteeredVLM:
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
         
-        return out.hidden_states[self.layer_idx][0, -1].float().cpu().numpy()
+        # Return all hidden states (tuple of tensors, one per layer)
+        return out.hidden_states
 
-    def set_vector(self, vec):
-        """Set the steering vector."""
-        self.vector = torch.tensor(vec, dtype=torch.float32, device="cpu")
+    def set_vector(self, vec, layer_idx=None):
+        """Set the steering vector(s).
+        
+        Args:
+            vec: Either a single vector (tensor/array) or a dict mapping layer_idx -> vector
+            layer_idx: If vec is a single vector, which layer it's for (defaults to self.layer_idx)
+        """
+        if isinstance(vec, dict):
+            # Setting multiple vectors at once
+            self.vectors = {k: torch.tensor(v, dtype=torch.float32, device="cpu") for k, v in vec.items()}
+            # Set active vector to the target layer if available
+            if self.layer_idx in self.vectors:
+                self.vector = self.vectors[self.layer_idx]
+        else:
+            # Setting a single vector
+            target_layer = layer_idx if layer_idx is not None else self.layer_idx
+            tensor_vec = torch.tensor(vec, dtype=torch.float32, device="cpu")
+            self.vectors[target_layer] = tensor_vec
+            if target_layer == self.layer_idx:
+                self.vector = tensor_vec
         self._vector_cache.clear()
 
     def generate(self, prompt, steer=False, max_new_tokens=80, image=None):
@@ -614,13 +662,19 @@ def _get_prompt_and_image(model, obs, env, max_elems):
 
 
 def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
-    """Compute activation difference for a contrastive pair."""
+    """Compute activation difference for a contrastive pair across all layers.
+    
+    Returns:
+        dict: Mapping layer_idx -> activation difference (numpy array)
+    """
     if model.vector_method == "prompt":
         # Standard CAA: Extract from prompt
         if image is not None:
-            diff = model._prompt_activation(pos, image=image) - model._prompt_activation(neg, image=image)
+            pos_states = model._prompt_activation(pos, image=image)
+            neg_states = model._prompt_activation(neg, image=image)
         else:
-            diff = model._prompt_activation(pos) - model._prompt_activation(neg)
+            pos_states = model._prompt_activation(pos)
+            neg_states = model._prompt_activation(neg)
     else:
         # Non-standard: Extract from generated response
         if image is not None:
@@ -631,27 +685,50 @@ def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
             neg_text = model.generate(neg, steer=False, max_new_tokens=max_new_tokens)
         
         # For VLM, _last_token_state doesn't need image
-        diff = model._last_token_state(pos_text) - model._last_token_state(neg_text)
+        pos_states = model._last_token_state(pos_text)
+        neg_states = model._last_token_state(neg_text)
     
-    return diff
+    # pos_states and neg_states are tuples of tensors (one per layer)
+    # Compute difference for each layer
+    diffs = {}
+    for layer_idx in range(len(pos_states)):
+        pos_layer = pos_states[layer_idx][0, -1].float().cpu().numpy()
+        neg_layer = neg_states[layer_idx][0, -1].float().cpu().numpy()
+        diffs[layer_idx] = pos_layer - neg_layer
+    
+    return diffs
 
 
-def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
-    """Compute steering vector from contrastive prompts."""
+def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type, cache_dir="vectors", model_alias=None, seed=0):
+    """Compute steering vectors for all layers from contrastive prompts.
+    
+    Computes and caches vectors for all layers simultaneously, then loads the target layer.
+    
+    Args:
+        model: SteeredModel or SteeredVLM instance
+        tasks: List of task names
+        steps: Number of training steps
+        max_elems: Max DOM elements
+        max_new_tokens: Max tokens for generation
+        prompt_type: Type of prompt configuration
+        cache_dir: Directory to cache vectors
+        model_alias: Short model name for cache path
+        seed: Random seed for cache path
+    """
     
     if prompt_type == "combined":
-        print("Computing Combined Vector (format_accuracy + composite_1)...")
-        vec_a_sum = None
-        vec_b_sum = None
+        print("Computing Combined Vector for all layers (format_accuracy + composite_1)...")
+        vec_a_sums = {}  # layer_idx -> accumulated vector A
+        vec_b_sums = {}  # layer_idx -> accumulated vector B
         
-        pbar = tqdm(total=steps, desc="Computing combined vector")
+        pbar = tqdm(total=steps, desc="Computing combined vectors")
         steps_per_task = max(1, steps // len(tasks))
 
         for task in tasks:
             env = gym.make(f"miniwob/{task}-v1")
             for _ in range(steps_per_task):
-                seed = random.randint(0, 2**31 - 1)
-                obs, _ = env.reset(seed=seed)
+                seed_val = random.randint(0, 2**31 - 1)
+                obs, _ = env.reset(seed=seed_val)
                 
                 # Get prompt and image based on model type
                 base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
@@ -659,14 +736,21 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
                 # Vector A: format_accuracy
                 pos_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
                 neg_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
-                diff_a = _compute_activation_diff(model, pos_a, neg_a, max_new_tokens, image)
-                vec_a_sum = diff_a if vec_a_sum is None else vec_a_sum + diff_a
+                diffs_a = _compute_activation_diff(model, pos_a, neg_a, max_new_tokens, image)
                 
                 # Vector B: composite_1
                 pos_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
                 neg_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
-                diff_b = _compute_activation_diff(model, pos_b, neg_b, max_new_tokens, image)
-                vec_b_sum = diff_b if vec_b_sum is None else vec_b_sum + diff_b
+                diffs_b = _compute_activation_diff(model, pos_b, neg_b, max_new_tokens, image)
+                
+                # Accumulate for each layer
+                for layer_idx in diffs_a.keys():
+                    if layer_idx not in vec_a_sums:
+                        vec_a_sums[layer_idx] = diffs_a[layer_idx]
+                        vec_b_sums[layer_idx] = diffs_b[layer_idx]
+                    else:
+                        vec_a_sums[layer_idx] += diffs_a[layer_idx]
+                        vec_b_sums[layer_idx] += diffs_b[layer_idx]
                 
                 pbar.update(1)
                 if pbar.n >= steps: break
@@ -674,39 +758,61 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
             if pbar.n >= steps: break
         pbar.close()
         
-        vec_a = vec_a_sum / max(1, pbar.n)
-        vec_b = vec_b_sum / max(1, pbar.n)
+        # Normalize and combine for each layer
+        all_vectors = {}
+        for layer_idx in vec_a_sums.keys():
+            vec_a = vec_a_sums[layer_idx] / max(1, pbar.n)
+            vec_b = vec_b_sums[layer_idx] / max(1, pbar.n)
+            
+            vec_a = vec_a / np.linalg.norm(vec_a)
+            vec_b = vec_b / np.linalg.norm(vec_b)
+            
+            combined = vec_a + vec_b
+            combined = combined / np.linalg.norm(combined)
+            all_vectors[layer_idx] = combined
         
-        vec_a = vec_a / np.linalg.norm(vec_a)
-        vec_b = vec_b / np.linalg.norm(vec_b)
+        # Save all vectors to cache
+        if cache_dir and model_alias is not None:
+            cache_subdir = os.path.join(cache_dir, model_alias, f"seed_{seed}")
+            os.makedirs(cache_subdir, exist_ok=True)
+            for layer_idx, vec in all_vectors.items():
+                cache_path = os.path.join(cache_subdir, f"{prompt_type}_L{layer_idx}.pt")
+                torch.save(torch.tensor(vec, dtype=torch.float32, device="cpu"), cache_path)
+            print(f">>> Saved {len(all_vectors)} vectors to {cache_subdir}")
         
-        combined = vec_a + vec_b
-        combined = combined / np.linalg.norm(combined)
-        model.set_vector(combined)
+        # Set all vectors in model
+        model.set_vector(all_vectors)
         return
 
     # Standard single-prompt logic
-    totals = None
+    totals = {}  # layer_idx -> accumulated difference
     pos_instr = PROMPT_CONFIGS[prompt_type]["pos"]
     neg_instr = PROMPT_CONFIGS[prompt_type]["neg"]
     
-    pbar = tqdm(total=steps, desc="Computing steering vector")
+    pbar = tqdm(total=steps, desc="Computing steering vectors for all layers")
     steps_per_task = max(1, steps // len(tasks))
 
     for task in tasks:
         env = gym.make(f"miniwob/{task}-v1")
         for _ in range(steps_per_task):
-            seed = random.randint(0, 2**31 - 1)
-            obs, _ = env.reset(seed=seed)
+            seed_val = random.randint(0, 2**31 - 1)
+            obs, _ = env.reset(seed=seed_val)
             
             # Get prompt and image based on model type
             base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
             pos = f"{base_prompt}\n{pos_instr}"
             neg = f"{base_prompt}\n{neg_instr}"
 
-            # Compute activation difference
-            diff = _compute_activation_diff(model, pos, neg, max_new_tokens, image)
-            totals = diff if totals is None else totals + diff
+            # Compute activation difference for all layers
+            diffs = _compute_activation_diff(model, pos, neg, max_new_tokens, image)
+            
+            # Accumulate for each layer
+            for layer_idx, diff in diffs.items():
+                if layer_idx not in totals:
+                    totals[layer_idx] = diff
+                else:
+                    totals[layer_idx] += diff
+            
             pbar.update(1)
 
             if pbar.n >= steps:
@@ -716,11 +822,26 @@ def compute_vector(model, tasks, steps, max_elems, max_new_tokens, prompt_type):
             break
     pbar.close()
 
-    vec = totals / max(1, pbar.n)
-    norm = np.linalg.norm(vec)
-    if norm > 0:
-        vec = vec / norm
-    model.set_vector(vec)
+    # Normalize each layer's vector
+    all_vectors = {}
+    for layer_idx, total in totals.items():
+        vec = total / max(1, pbar.n)
+        norm = np.linalg.norm(vec)
+        if norm > 0:
+            vec = vec / norm
+        all_vectors[layer_idx] = vec
+    
+    # Save all vectors to cache
+    if cache_dir and model_alias is not None:
+        cache_subdir = os.path.join(cache_dir, model_alias, f"seed_{seed}")
+        os.makedirs(cache_subdir, exist_ok=True)
+        for layer_idx, vec in all_vectors.items():
+            cache_path = os.path.join(cache_subdir, f"{prompt_type}_L{layer_idx}.pt")
+            torch.save(torch.tensor(vec, dtype=torch.float32, device="cpu"), cache_path)
+        print(f">>> Saved {len(all_vectors)} vectors to {cache_subdir}")
+    
+    # Set all vectors in model
+    model.set_vector(all_vectors)
 
 # =============================================================================
 # EVALUATION
@@ -925,21 +1046,28 @@ def main():
 
     # Compute or load steering vector
     if not args.base_only:
-        # Construct cache path
+        # Construct cache path for the target layer
         cache_subdir = os.path.join(args.cache_dir, args.model, f"seed_{args.seed}")
-        os.makedirs(cache_subdir, exist_ok=True)
         cache_path = os.path.join(cache_subdir, f"{args.prompt_type}_L{layer_idx}.pt")
         
-        # Check cache
+        # Check if target layer vector is cached
         if os.path.exists(cache_path) and not args.force_recompute:
             print(f">>> Loading cached vector from {cache_path}")
             cached_vector = torch.load(cache_path, map_location="cpu")
-            model.set_vector(cached_vector)
+            model.set_vector(cached_vector, layer_idx=layer_idx)
         else:
-            print(f">>> Computing new vector (cache {'disabled' if args.force_recompute else 'miss'})")
-            compute_vector(model, tasks, args.train_steps, 80, 80, args.prompt_type)
-            print(f">>> Saving vector to {cache_path}")
-            torch.save(model.vector.cpu(), cache_path)
+            # Cache miss: compute all layers
+            print(f">>> Computing vectors for all layers (cache {'disabled' if args.force_recompute else 'miss'})")
+            compute_vector(
+                model, tasks, args.train_steps, 80, 80, args.prompt_type,
+                cache_dir=args.cache_dir,
+                model_alias=args.model,
+                seed=args.seed
+            )
+            # compute_vector saves all layers and sets model.vectors
+            # Verify the target layer was loaded
+            if model.vector is None:
+                raise RuntimeError(f"Failed to load vector for layer {layer_idx}")
 
     # Evaluate
     results = evaluate(model, tasks, args.eval_steps, 80, 80, args.out, args.base_only)
