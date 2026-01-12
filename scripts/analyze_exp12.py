@@ -18,7 +18,7 @@ MODEL_INFO = {
     "gemma-2b": {"family": "Gemma", "size": "2B", "params": 2.0},
     "llama-3b": {"family": "Llama", "size": "3B", "params": 3.0},
     "phi-3.8b": {"family": "Phi", "size": "3.8B", "params": 3.8},
-    "qwen-vl-3b": {"family": "Qwen-VL", "size": "3B", "params": 3.8, "vlm": True},
+    "qwen-vl-2b": {"family": "Qwen-VL", "size": "2B", "params": 2.0, "vlm": True},
 }
 
 def load_results(filepath):

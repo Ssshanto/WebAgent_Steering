@@ -30,7 +30,7 @@ TEXT_MODELS=(
 )
 
 VLM_MODELS=(
-    "qwen-vl-3b"    # VLM last (most complex)
+    "qwen-vl-2b"    # VLM last (Qwen2-VL-2B-Instruct)
 )
 
 mkdir -p results/exp12

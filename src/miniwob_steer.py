@@ -44,8 +44,8 @@ MODEL_MAP = {
     "gemma-2b": "google/gemma-2-2b-it",
     "phi-3.8b": "microsoft/Phi-3.5-mini-instruct",
     "smollm-1.7b": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
-    # VLM
-    "qwen-vl-3b": "Qwen/Qwen2.5-VL-3B-Instruct",
+    # VLM - Use Qwen2-VL-2B (stable, proven)
+    "qwen-vl-2b": "Qwen/Qwen2-VL-2B-Instruct",
 }
 
 # Layer depths for 50% intervention point (mid-layer steering)
@@ -58,11 +58,11 @@ LAYER_MAP = {
     "gemma-2b": 13,    # 26 layers → L13 (50%)
     "phi-3.8b": 16,    # 32 layers → L16 (50%)
     "smollm-1.7b": 12, # 24 layers → L12 (50%)
-    "qwen-vl-3b": 18,  # 36 LLM layers → L18 (50% of LLM backbone)
+    "qwen-vl-2b": 14,  # 28 LLM layers → L14 (50% of LLM backbone)
 }
 
 # Models that require VLM mode
-VLM_MODELS = {"qwen-vl-3b"}
+VLM_MODELS = {"qwen-vl-2b"}
 
 # =============================================================================
 # VLM HELPERS
@@ -140,14 +140,31 @@ def load_vlm(model_id):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
     
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
-        model_id,
-        torch_dtype=dtype,
-        device_map="auto" if device == "cuda" else None,
-    )
-    processor = AutoProcessor.from_pretrained(model_id)
+    print(f"Loading VLM: {model_id}")
+    print(f"  Device: {device}, dtype: {dtype}")
     
-    return model, processor
+    try:
+        model = Qwen2VLForConditionalGeneration.from_pretrained(
+            model_id,
+            torch_dtype=dtype,
+            device_map="auto" if device == "cuda" else None,
+            trust_remote_code=True,  # Required for Qwen models
+        )
+        processor = AutoProcessor.from_pretrained(
+            model_id,
+            trust_remote_code=True,
+        )
+        
+        print(f"✓ VLM loaded successfully")
+        return model, processor
+        
+    except Exception as e:
+        print(f"✗ Failed to load VLM: {e}")
+        print(f"\nTroubleshooting:")
+        print(f"  1. Check model exists: https://huggingface.co/{model_id}")
+        print(f"  2. Update transformers: pip install --upgrade transformers")
+        print(f"  3. Try different model: Qwen/Qwen2-VL-7B-Instruct")
+        raise
 
 # =============================================================================
 # TASK CONFIGURATION
