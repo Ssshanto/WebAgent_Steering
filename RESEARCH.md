@@ -606,12 +606,16 @@ Based on Exp 11 findings, use single best config:
 
 | Model | Baseline Acc | Steered Acc | Delta | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Gemma 2B** | 2.5% | 1.5% | -1.0% | **Negative** (Model too weak) |
+| **Gemma 2B** | 27.5% | 27.8% | +0.3% | **Null** (Extremely rigid) |
 | **Llama 1B** | 0.0% | 4.2% | +4.2% | **Slight Positive** (Format shift) |
 | **Llama 3B** | 50.5% | 51.5% | **+1.0%** | **Slight Positive** |
 | **Phi 3.5** | 56.0% | 55.8% | -0.2% | **Null** (Strong baseline) |
-| **Qwen 1.5B**| 21.8% | 20.8% | -1.0% | **Negative** |
+| **Qwen 1.5B**| 21.8% | 22.2% | +0.4% | **Null** (L12, a1.0) |
 | **SmolLM 1.7B**| 2.8% | 2.8% | 0.0% | **Null** |
+
+**Gemma 2B Analysis:**
+- **Baseline Fix:** Initial results (2.5%) were identified as a parsing artifact. The model consistently appends a pipe (`|`) to actions (e.g., `click ref=4 |`). Relaxing the regex parser from `fullmatch` to `match` corrected the baseline success rate to **27.5%**.
+- **Steering Rigidity:** Despite a full sweep (Layers 11–15, Alpha 1.0–4.0), steering had almost zero impact on performance (max delta +0.3%). This suggests that Gemma 2B's response patterns for web tasks are highly ingrained and less susceptible to simple activation steering compared to Llama or Qwen models.
 
 **Llama 1B Failure Analysis:**
 - **Issue:** Consistent near-0% accuracy.
@@ -663,4 +667,4 @@ Based on Exp 11 findings, use single best config:
 ---
 
 *Last Updated: 2026-01-12*
-*Status: **ONGOING** - Exp 11 Success (+14.2% on Qwen 0.5B). Exp 12 Multi-Model Scaling in progress (Llama 3B shows slight promise).*
+*Status: **ONGOING** - Exp 11 Success (+14.2% on Qwen 0.5B). Exp 12 Multi-Model Scaling in progress (Llama 3B and Llama 1B show slight formatting-based improvements).*
