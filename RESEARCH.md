@@ -599,6 +599,26 @@ Based on Exp 11 findings, use single best config:
 - MiniWob provides screenshots via Selenium `get_screenshot_as_png()`
 - Reference: VisualWebArena (Koh et al., 2024), ScreenAgent (IJCAI-24)
 
+### Preliminary Results (Exp 12)
+
+**Baseline vs. Steered (Default Config)**
+*Steering Config: Layer 50%, Alpha 3.0, Prompt "accuracy"*
+
+| Model | Baseline Acc | Steered Acc | Delta | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Gemma 2B** | 2.5% | 1.5% | -1.0% | **Negative** (Model too weak) |
+| **Llama 1B** | 0.0% | 0.2% | +0.2% | **Null** (Fails all tasks) |
+| **Llama 3B** | 50.5% | 51.5% | **+1.0%** | **Slight Positive** |
+| **Phi 3.5** | 56.0% | 55.8% | -0.2% | **Null** (Strong baseline) |
+| **Qwen 1.5B**| 21.8% | 20.8% | -1.0% | **Negative** |
+| **SmolLM 1.7B**| 2.8% | 2.8% | 0.0% | **Null** |
+
+**Llama 1B Failure Analysis:**
+- **Issue:** Consistent 0% accuracy across baseline and steered runs.
+- **Root Cause:** Excessive hallucination and format non-compliance. The model generates repetitive, pipe-delimited sequences (e.g., `click 2 | click 3 | select 2 1`) instead of single actions.
+- **Impact:** The parser fails to extract any valid action.
+- **Hypothesis:** Llama 1B Instruct may require specific system prompt tuning or few-shot examples to adhere to the strict "one line, no explanation" constraint, which zero-shot steering alone could not fix.
+
 ---
 
 ## References
@@ -636,5 +656,5 @@ Based on Exp 11 findings, use single best config:
 
 ---
 
-*Last Updated: 2026-01-10*
-*Status: **SUCCESS** - Identified definitive "Two-Peak" steering strategy. Best config (L11, α=3.0, "accuracy") yields +14.2% accuracy gain.*
+*Last Updated: 2026-01-12*
+*Status: **ONGOING** - Exp 11 Success (+14.2% on Qwen 0.5B). Exp 12 Multi-Model Scaling in progress (Llama 3B shows slight promise).*
