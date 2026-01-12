@@ -608,27 +608,31 @@ def build_vlm_prompt(obs):
 # =============================================================================
 
 def parse_action(text):
-    """Parse action(s) from model output. Returns list of actions or None."""
+    """Parse action(s) from model output. Returns list of actions or None.
+
+    Uses lenient parsing (re.match) to tolerate trailing characters like pipes,
+    consistent with standard web agent benchmarks (WebArena, Mind2Web, SeeAct).
+    """
     lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
     if not lines:
         return None
 
     actions = []
     for line in lines:
-        # Click
-        match = re.fullmatch(r"click\s+ref=(\d+)", line, flags=re.IGNORECASE)
+        # Click - matches from start, tolerates trailing characters
+        match = re.match(r"click\s+ref=(\d+)", line, flags=re.IGNORECASE)
         if match:
             actions.append({"action": "CLICK", "ref": int(match.group(1))})
             continue
 
-        # Type
-        match = re.fullmatch(r'type\s+ref=(\d+)\s+text="(.*)"', line, flags=re.IGNORECASE)
+        # Type - matches from start, tolerates trailing characters
+        match = re.match(r'type\s+ref=(\d+)\s+text="(.*?)"', line, flags=re.IGNORECASE)
         if match:
             actions.append({"action": "TYPE", "ref": int(match.group(1)), "text": match.group(2)})
             continue
 
-        # Select
-        match = re.fullmatch(r'select\s+ref=(\d+)\s+option="(.*)"', line, flags=re.IGNORECASE)
+        # Select - matches from start, tolerates trailing characters
+        match = re.match(r'select\s+ref=(\d+)\s+option="(.*?)"', line, flags=re.IGNORECASE)
         if match:
             actions.append({"action": "SELECT", "ref": int(match.group(1)), "option": match.group(2)})
             continue

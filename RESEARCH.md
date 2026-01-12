@@ -622,6 +622,8 @@ Based on Exp 11 findings, use single best config:
 - **Result:** This formatting shift allowed the parser to extract the first action. In **4.2%** of cases, this first hallucinated action happened to be correct, leading to "success". This confirms steering modified the *style* of generation but likely not the *reasoning*.
 
 **Qwen 1.5B Analysis:**
+- **Stability:** Extremely stable baseline (21.8%).
+- **Steering Effect:** Negligible. Best configuration (Layer 12, Alpha 1.0) yielded 22.2% (+0.4%). Stronger steering (Alpha 3.0-4.0) or deeper layers (14-16) degraded performance to ~15-18%.
 
 ---
 
