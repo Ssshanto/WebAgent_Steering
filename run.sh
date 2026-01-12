@@ -7,6 +7,9 @@
 
 set -e
 
+# Force usage of local cache where Llama 1B is stored
+export HF_HOME="/home/deeplearning01/.cache/huggingface"
+
 MODEL="llama-1b"
 PROMPT_TYPE="accuracy"
 VECTOR_METHOD="response"
