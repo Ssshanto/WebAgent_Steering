@@ -306,6 +306,16 @@ class SteeredModel:
     def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False, vector_method="response"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.tokenizer = AutoTokenizer.from_pretrained(model_name)
+        
+        # Detect stop tokens (Llama models need <|eot_id|> in addition to <|end_of_text|>)
+        self.stop_token_ids = [self.tokenizer.eos_token_id]
+        try:
+            eot_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            if eot_id is not None and eot_id != self.tokenizer.unk_token_id:
+                self.stop_token_ids.append(eot_id)
+        except Exception:
+            pass
+        
         dtype = torch.float16 if self.device == "cuda" else torch.float32
         self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
         self.model.to(self.device)
@@ -393,7 +403,13 @@ class SteeredModel:
             return output
 
         handle = self.model.model.layers[self.layer_idx].register_forward_hook(hook)
-        out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        out = self.model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            eos_token_id=self.stop_token_ids,
+            pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+        )
         handle.remove()
 
         generated_tokens = out[0][input_length:]
@@ -406,6 +422,16 @@ class SteeredVLM:
     def __init__(self, model_name, layer_idx, coeff, vector_method="response"):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model, self.processor = load_vlm(model_name)
+        
+        # Detect stop tokens (Llama models need <|eot_id|> in addition to <|end_of_text|>)
+        self.stop_token_ids = [self.processor.tokenizer.eos_token_id]
+        try:
+            eot_id = self.processor.tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            if eot_id is not None and eot_id != self.processor.tokenizer.unk_token_id:
+                self.stop_token_ids.append(eot_id)
+        except Exception:
+            pass
+        
         self.layer_idx = layer_idx
         self.coeff = coeff
         self.vector_method = vector_method
@@ -526,7 +552,13 @@ class SteeredVLM:
         llm_layers = self._get_llm_layers()
         handle = llm_layers[self.layer_idx].register_forward_hook(hook)
         
-        out = self.model.generate(**inputs, max_new_tokens=max_new_tokens, do_sample=False)
+        out = self.model.generate(
+            **inputs,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            eos_token_id=self.stop_token_ids,
+            pad_token_id=self.processor.tokenizer.pad_token_id or self.processor.tokenizer.eos_token_id,
+        )
         handle.remove()
 
         generated_tokens = out[0][input_length:]
