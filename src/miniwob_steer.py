@@ -15,6 +15,7 @@ Supports:
 import argparse
 import io
 import json
+import os
 import random
 import re
 
@@ -876,6 +877,8 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--base-only", action="store_true", help="Evaluate baseline only")
     parser.add_argument("--vlm", action="store_true", help="Enable VLM mode (screenshot + SoM)")
+    parser.add_argument("--cache-dir", default="vectors", help="Directory to cache steering vectors")
+    parser.add_argument("--force-recompute", action="store_true", help="Force recomputation of steering vector")
     args = parser.parse_args()
 
     # Resolve layer
@@ -920,9 +923,23 @@ def main():
             vector_method=args.vector_method,
         )
 
-    # Compute steering vector
+    # Compute or load steering vector
     if not args.base_only:
-        compute_vector(model, tasks, args.train_steps, 80, 80, args.prompt_type)
+        # Construct cache path
+        cache_subdir = os.path.join(args.cache_dir, args.model, f"seed_{args.seed}")
+        os.makedirs(cache_subdir, exist_ok=True)
+        cache_path = os.path.join(cache_subdir, f"{args.prompt_type}_L{layer_idx}.pt")
+        
+        # Check cache
+        if os.path.exists(cache_path) and not args.force_recompute:
+            print(f">>> Loading cached vector from {cache_path}")
+            cached_vector = torch.load(cache_path, map_location="cpu")
+            model.set_vector(cached_vector)
+        else:
+            print(f">>> Computing new vector (cache {'disabled' if args.force_recompute else 'miss'})")
+            compute_vector(model, tasks, args.train_steps, 80, 80, args.prompt_type)
+            print(f">>> Saving vector to {cache_path}")
+            torch.save(model.vector.cpu(), cache_path)
 
     # Evaluate
     results = evaluate(model, tasks, args.eval_steps, 80, 80, args.out, args.base_only)
