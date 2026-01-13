@@ -442,8 +442,8 @@ class SteeredVLM:
 
     def _get_llm_layers(self):
         """Get LLM backbone layers for steering (skip ViT encoder)."""
-        # Qwen2.5-VL architecture: model.model.layers contains LLM layers
-        return self.model.model.layers
+        # Qwen2-VL architecture: model.model.language_model.layers contains LLM layers
+        return self.model.model.language_model.layers
 
     def _last_token_state(self, text):
         """Extract activation from last token of text for all layers."""
