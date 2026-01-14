@@ -1,36 +1,36 @@
 #!/bin/bash
-# Focused Small Models Accuracy Sweep
-# Models: smollm-360m, stablelm-1.6b, gemma-1b
-# Layers: Center +/- 2
-# Alphas: 1.0 2.0 3.0 4.0
+# Focused Small Models Accuracy Sweep (Optimized)
+# Models: stablelm-1.6b, gemma-1b (SmolLM skipped due to failure)
+# Layers: Center +/- 1 (3 layers total)
+# Alphas: 2.0, 3.0
 
 set -e
 export HF_HOME="/home/deeplearning01/.cache/huggingface"
 
 # Define models and their center layers
 declare -A CENTER_LAYERS
-CENTER_LAYERS["smollm-360m"]=16
 CENTER_LAYERS["stablelm-1.6b"]=12
 CENTER_LAYERS["gemma-1b"]=13
 
-MODELS=("smollm-360m" "stablelm-1.6b" "gemma-1b")
+MODELS=("stablelm-1.6b" "gemma-1b")
 PROMPT_TYPE="accuracy"
 VECTOR_METHOD="response"
 TRAIN_STEPS=200
 EVAL_STEPS=400
 SEED=0
-ALPHAS=(1.0 2.0 3.0 4.0)
+ALPHAS=(2.0 3.0)
 
 mkdir -p results/small_models_sweep
 
 for MODEL in "${MODELS[@]}"; do
     CENTER=${CENTER_LAYERS[$MODEL]}
-    # Range: Center-2 to Center+2
-    LAYERS=($(seq $((CENTER - 2)) $((CENTER + 2))))
+    # Range: Center-1 to Center+1
+    LAYERS=($(seq $((CENTER - 1)) $((CENTER + 1))))
     
     echo "========================================"
     echo "Sweeping $MODEL (Center L$CENTER)"
     echo "Layers: ${LAYERS[*]}"
+    echo "Alphas: ${ALPHAS[*]}"
     echo "========================================"
     
     # 1. Baseline
