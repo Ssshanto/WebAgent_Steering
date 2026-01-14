@@ -92,8 +92,8 @@ MODEL_ARCH = {
     "smollm-360m": "smollm",
     # TinyLlama uses Llama-2 style: model.model.layers
     "tinyllama-1.1b": "llama",
-    # StableLM uses GPTNeoX style: model.gpt_neox.layers
-    "stablelm-1.6b": "stablelm",
+    # StableLM 2 is Llama-like: model.model.layers
+    "stablelm-1.6b": "qwen",
     # OPT uses: model.model.decoder.layers
     "opt-iml-1.3b": "opt",
     # VLM
