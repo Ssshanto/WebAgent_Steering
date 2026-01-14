@@ -38,29 +38,70 @@ MODEL_MAP = {
     "3b": "Qwen/Qwen2.5-3B-Instruct",
     # Qwen family (extended)
     "qwen-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
+    "qwen-coder-0.5b": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
     # Llama family
     "llama-1b": "meta-llama/Llama-3.2-1B-Instruct",
     "llama-3b": "meta-llama/Llama-3.2-3B-Instruct",
     # Other families
     "gemma-2b": "google/gemma-2-2b-it",
+    "gemma-1b": "google/gemma-3-1b-it",
     "phi-3.8b": "microsoft/Phi-3.5-mini-instruct",
     "smollm-1.7b": "HuggingFaceTB/SmolLM2-1.7B-Instruct",
+    "smollm-360m": "HuggingFaceTB/SmolLM2-360M-Instruct",
+    "tinyllama-1.1b": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
+    "stablelm-1.6b": "stabilityai/stablelm-2-1_6b-chat",
+    "opt-iml-1.3b": "facebook/opt-iml-1.3b",
     # VLM - Use Qwen2-VL-2B (stable, proven)
     "qwen-vl-2b": "Qwen/Qwen2-VL-2B-Instruct",
 }
 
 # Layer depths for 50% intervention point (mid-layer steering)
 LAYER_MAP = {
-    "0.5b": 11,        # 24 layers → L11 (46%)
-    "3b": 18,          # 36 layers → L18 (50%)
-    "qwen-1.5b": 14,   # 28 layers → L14 (50%)
-    "llama-1b": 8,     # 16 layers → L8 (50%)
-    "llama-3b": 14,    # 28 layers → L14 (50%)
-    "gemma-2b": 13,    # 26 layers → L13 (50%)
-    "phi-3.8b": 16,    # 32 layers → L16 (50%)
-    "smollm-1.7b": 12, # 24 layers → L12 (50%)
-    "qwen-vl-2b": 14,  # 28 LLM layers → L14 (50% of LLM backbone)
+    "0.5b": 11,           # 24 layers → L11 (46%)
+    "3b": 18,             # 36 layers → L18 (50%)
+    "qwen-1.5b": 14,      # 28 layers → L14 (50%)
+    "qwen-coder-0.5b": 11, # 24 layers → L11 (46%)
+    "llama-1b": 8,        # 16 layers → L8 (50%)
+    "llama-3b": 14,       # 28 layers → L14 (50%)
+    "gemma-2b": 13,       # 26 layers → L13 (50%)
+    "gemma-1b": 13,       # 26 layers → L13 (50%)
+    "phi-3.8b": 16,       # 32 layers → L16 (50%)
+    "smollm-1.7b": 12,    # 24 layers → L12 (50%)
+    "smollm-360m": 16,    # 32 layers → L16 (50%)
+    "tinyllama-1.1b": 11, # 22 layers → L11 (50%)
+    "stablelm-1.6b": 12,  # 24 layers → L12 (50%)
+    "opt-iml-1.3b": 12,   # 24 layers → L12 (50%)
+    "qwen-vl-2b": 14,     # 28 LLM layers → L14 (50% of LLM backbone)
 }
+
+# Model architecture types for layer access patterns
+# Different model families have different internal structures
+MODEL_ARCH = {
+    # Qwen/Llama-style: model.model.layers
+    "0.5b": "qwen",
+    "3b": "qwen",
+    "qwen-1.5b": "qwen",
+    "qwen-coder-0.5b": "qwen",
+    "llama-1b": "llama",
+    "llama-3b": "llama",
+    "gemma-2b": "gemma",
+    "gemma-1b": "gemma",
+    "phi-3.8b": "phi",
+    # SmolLM uses GPT-2 style: model.transformer.h
+    "smollm-1.7b": "smollm",
+    "smollm-360m": "smollm",
+    # TinyLlama uses Llama-2 style: model.model.layers
+    "tinyllama-1.1b": "llama",
+    # StableLM uses GPTNeoX style: model.gpt_neox.layers
+    "stablelm-1.6b": "stablelm",
+    # OPT uses: model.model.decoder.layers
+    "opt-iml-1.3b": "opt",
+    # VLM
+    "qwen-vl-2b": "qwen-vl",
+}
+
+# Models that don't support chat templates (need raw prompting)
+NO_CHAT_TEMPLATE = {"opt-iml-1.3b"}
 
 # Models that require VLM mode
 VLM_MODELS = {"qwen-vl-2b"}
@@ -74,6 +115,73 @@ def get_layer(model_key, layer_arg):
     if layer_arg == "auto":
         return LAYER_MAP.get(model_key, 14)
     return int(layer_arg)
+
+
+def get_model_layers(model, model_key):
+    """Get the layers module for a given model based on its architecture.
+
+    Different model families have different internal structures:
+    - Qwen/Llama/Gemma/Phi: model.model.layers
+    - SmolLM (GPT-2 style): model.transformer.h
+    - StableLM (GPTNeoX style): model.gpt_neox.layers
+    - OPT: model.model.decoder.layers
+    """
+    arch = MODEL_ARCH.get(model_key, "qwen")
+
+    if arch in ("qwen", "llama", "gemma", "phi"):
+        return model.model.layers
+    elif arch == "smollm":
+        return model.transformer.h
+    elif arch == "stablelm":
+        return model.gpt_neox.layers
+    elif arch == "opt":
+        return model.model.decoder.layers
+    else:
+        # Default fallback
+        return model.model.layers
+
+
+def get_additional_stop_tokens(tokenizer, model_key):
+    """Get additional stop tokens for specific models.
+
+    Different models use different end-of-turn tokens:
+    - Llama: <|eot_id|>
+    - Gemma: <end_of_turn>
+    - TinyLlama: </s>
+    """
+    stop_tokens = []
+    arch = MODEL_ARCH.get(model_key, "qwen")
+
+    # Llama-style models
+    if arch == "llama":
+        try:
+            eot_id = tokenizer.convert_tokens_to_ids("<|eot_id|>")
+            if eot_id is not None and eot_id != tokenizer.unk_token_id:
+                stop_tokens.append(eot_id)
+        except Exception:
+            pass
+
+    # Gemma models
+    elif arch == "gemma":
+        try:
+            end_turn = tokenizer.convert_tokens_to_ids("<end_of_turn>")
+            if end_turn is not None and end_turn != tokenizer.unk_token_id:
+                stop_tokens.append(end_turn)
+        except Exception:
+            pass
+
+    # StableLM models
+    elif arch == "stablelm":
+        try:
+            # StableLM uses <|endoftext|> and sometimes <|im_end|>
+            for token in ["<|endoftext|>", "<|im_end|>"]:
+                tok_id = tokenizer.convert_tokens_to_ids(token)
+                if tok_id is not None and tok_id != tokenizer.unk_token_id:
+                    stop_tokens.append(tok_id)
+        except Exception:
+            pass
+
+    return stop_tokens
 
 
 def capture_screenshot(env):
@@ -303,21 +411,22 @@ PROMPT_CONFIGS = {
 class SteeredModel:
     """LLM with activation steering capability."""
 
-    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False, vector_method="response"):
+    def __init__(self, model_name, layer_idx, coeff, steer_all_layers=False, vector_method="response", model_key=None):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.tokenizer = AutoTokenizer.from_pretrained(model_name)
-        
-        # Detect stop tokens (Llama models need <|eot_id|> in addition to <|end_of_text|>)
+        self.model_key = model_key  # Store for architecture-specific handling
+        self.tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
+
+        # Detect stop tokens based on model architecture
         self.stop_token_ids = [self.tokenizer.eos_token_id]
-        try:
-            eot_id = self.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-            if eot_id is not None and eot_id != self.tokenizer.unk_token_id:
-                self.stop_token_ids.append(eot_id)
-        except Exception:
-            pass
-        
+        self.stop_token_ids.extend(get_additional_stop_tokens(self.tokenizer, model_key))
+        # Remove duplicates and None values
+        self.stop_token_ids = list(set(t for t in self.stop_token_ids if t is not None))
+
+        # Check if model needs raw prompting (no chat template)
+        self.use_chat_template = model_key not in NO_CHAT_TEMPLATE
+
         dtype = torch.float16 if self.device == "cuda" else torch.float32
-        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype)
+        self.model = AutoModelForCausalLM.from_pretrained(model_name, torch_dtype=dtype, trust_remote_code=True)
         self.model.to(self.device)
         self.model.eval()
         self.layer_idx = layer_idx
@@ -339,10 +448,14 @@ class SteeredModel:
 
     def _prompt_activation(self, prompt):
         """Extract activation from prompt before generation for all layers."""
-        messages = [{"role": "user", "content": prompt}]
-        formatted = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        if self.use_chat_template:
+            messages = [{"role": "user", "content": prompt}]
+            formatted = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            # Models without chat template (e.g., OPT)
+            formatted = f"User: {prompt}\nAssistant:"
         inputs = self.tokenizer(formatted, return_tensors="pt").to(self.device)
         with torch.no_grad():
             out = self.model(**inputs, output_hidden_states=True)
@@ -373,10 +486,14 @@ class SteeredModel:
 
     def generate(self, prompt, steer=False, max_new_tokens=80):
         """Generate text, optionally with steering."""
-        messages = [{"role": "user", "content": prompt}]
-        formatted_prompt = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
+        if self.use_chat_template:
+            messages = [{"role": "user", "content": prompt}]
+            formatted_prompt = self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+        else:
+            # Models without chat template (e.g., OPT)
+            formatted_prompt = f"User: {prompt}\nAssistant:"
 
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
         input_length = inputs.input_ids.shape[1]
@@ -402,7 +519,9 @@ class SteeredModel:
                 target[-1, :] += self.coeff * vec
             return output
 
-        handle = self.model.model.layers[self.layer_idx].register_forward_hook(hook)
+        # Get layers based on model architecture
+        layers = get_model_layers(self.model, self.model_key)
+        handle = layers[self.layer_idx].register_forward_hook(hook)
         out = self.model.generate(
             **inputs,
             max_new_tokens=max_new_tokens,
@@ -1078,6 +1197,7 @@ def main():
             layer_idx=layer_idx,
             coeff=args.coeff,
             vector_method=args.vector_method,
+            model_key=args.model,
         )
 
     # Compute or load steering vector

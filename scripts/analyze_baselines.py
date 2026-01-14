@@ -8,7 +8,7 @@ def calculate_accuracy(file_path):
             lines = f.readlines()
         
         if not lines:
-            return 0.0, 0
+            return 0.0, 0.0, 0
         
         total = len(lines)
         base_hits = 0
@@ -24,22 +24,22 @@ def calculate_accuracy(file_path):
             except json.JSONDecodeError:
                 continue
                 
-        return (base_hits / total, steer_hits / total, total)
+        return (float(base_hits) / total, float(steer_hits) / total, int(total))
     except Exception as e:
-        return None
+        return 0.0, 0.0, 0
 
 def main():
     base_dir = "/mnt/code/Reaz/WebAgent_Steering/results"
     
-    # Focus on exp12 and exp12_grid where we have clear model names
     target_dirs = [
-        os.path.join(base_dir, "exp12"),
-        os.path.join(base_dir, "exp12_grid"),
-        os.path.join(base_dir, "llama1b_accuracy_sweep")
+        os.path.join(base_dir, "llama1b_accuracy_sweep"),
+        os.path.join(base_dir, "qwen1.5b_accuracy_sweep"),
+        os.path.join(base_dir, "gemma2b_accuracy_sweep"),
+        os.path.join(base_dir, "phi-3.8b_accuracy_sweep"),
+        os.path.join(base_dir, "smollm-1.7b_accuracy_sweep"),
+        os.path.join(base_dir, "qwen-vl-2b_accuracy_sweep")
     ]
     
-    results = {}
-
     print(f"{'Model':<20} | {'Experiment':<25} | {'Base Acc':<10} | {'Steer Acc':<10} | {'Episodes':<8}")
     print("-" * 85)
 
@@ -47,31 +47,25 @@ def main():
         if not os.path.exists(directory):
             continue
             
-        # Group by model
         files = glob.glob(os.path.join(directory, "*.jsonl"))
         
         for file_path in sorted(files):
             filename = os.path.basename(file_path)
             
-            # Simple parsing of filename
             if "_baseline" in filename:
                 model = filename.split("_baseline")[0]
                 exp_type = "Baseline"
-            elif "_steered" in filename:
-                model = filename.split("_steered")[0]
-                exp_type = "Steered (Default)"
-            elif "L" in filename and "a" in filename: # Likely sweep file
+            elif "L" in filename and "a" in filename:
                 parts = filename.split("_")
                 model = parts[0]
-                # Try to find Layer/Alpha
-                exp_type = "_".join(parts[1:]).replace(".jsonl", "")
+                exp_parts = [p for p in parts[1:] if p.startswith('L') or p.startswith('a')]
+                exp_type = "_".join(exp_parts).replace(".jsonl", "")
             else:
                 continue
 
             stats = calculate_accuracy(file_path)
-            if stats:
-                base_acc, steer_acc, total = stats
-                print(f"{model:<20} | {exp_type:<25} | {base_acc:.1%}     | {steer_acc:.1%}     | {total:<8}")
+            base_acc, steer_acc, total = stats
+            print(f"{model:<20} | {exp_type:<25} | {base_acc:.1%}     | {steer_acc:.1%}     | {total:<8}")
 
 if __name__ == "__main__":
     main()
