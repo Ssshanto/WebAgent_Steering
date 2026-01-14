@@ -87,9 +87,9 @@ MODEL_ARCH = {
     "gemma-2b": "gemma",
     "gemma-1b": "gemma",
     "phi-3.8b": "phi",
-    # SmolLM uses GPT-2 style: model.transformer.h
-    "smollm-1.7b": "smollm",
-    "smollm-360m": "smollm",
+    # SmolLM2 is Llama-based: model.model.layers
+    "smollm-1.7b": "qwen",
+    "smollm-360m": "qwen",
     # TinyLlama uses Llama-2 style: model.model.layers
     "tinyllama-1.1b": "llama",
     # StableLM 2 is Llama-like: model.model.layers
