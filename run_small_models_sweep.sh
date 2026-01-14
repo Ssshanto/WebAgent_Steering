@@ -5,6 +5,7 @@
 # Alphas: 1.0 2.0 3.0 4.0
 
 set -e
+# Use the default cache location where we manually downloaded models
 export HF_HOME="/home/deeplearning01/.cache/huggingface"
 
 # Define models and their center layers
