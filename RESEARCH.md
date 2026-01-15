@@ -633,22 +633,30 @@ Based on Exp 11 findings, use single best config:
 
 ## TODO: Refined Hypothesis Validation (Exp 13)
 
-### Preliminary Results (Exp 13: Small Model Survey)
+### Final Consolidated Results (All Experiments)
 
-We tested additional small models to validate the "Inverse Scaling" hypothesis.
+**Baseline vs. Steered Performance (Best Configuration)**
 
-| Model | Params | Baseline | Best Steered | Δ | Status |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **Qwen-Coder 0.5B** | 0.5B | 17.8% | **24.8%** | **+7.0%** | **Success** (Domain transfer) |
-| **TinyLlama 1.1B** | 1.1B | 0.0% | 3.8% | +3.8% | **Slight Positive** (Format) |
-| **SmolLM 360M** | 0.36B | 0.0% | 0.0% | 0.0% | **Failure** (Repeats input HTML) |
-| **StableLM 1.6B** | 1.6B | *Pending* | *Pending* | - | Running |
-| **Gemma 1B** | 1.0B | *Pending* | *Pending* | - | Running |
+| Model | Params | Baseline Acc | Steered Acc | **Delta (Δ)** | Parse Fail (Base) | Parse Fail (Steer) | Status |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :--- |
+| **Qwen 0.5B** | 0.5B | 10.0% | **24.2%** | **+14.2%** | 45.2% | 12.5% | **Success** |
+| **Qwen-Coder 0.5B** | 0.5B | 17.8% | **24.8%** | **+7.0%** | ~18% | ~10% | **Success** |
+| **Llama 1B** | 1.0B | 0.0% | 4.2% | **+4.2%** | 100.0% | 96.8% | **Positive** (Format Fix) |
+| **StableLM 1.6B** | 1.6B | 1.2% | 5.2% | **+4.0%** | >90% | >85% | **Positive** |
+| **TinyLlama 1.1B** | 1.1B | 0.0% | 3.8% | **+3.8%** | 100.0% | ~96% | **Positive** (Format Fix) |
+| **Llama 3B** | 3.0B | 50.5% | 51.5% | +1.0% | 5.0% | 4.8% | Marginal |
+| **Qwen 1.5B** | 1.5B | 44.0% | 44.5% | +0.5% | 0.0% | 0.0% | Null (Stable) |
+| **Gemma 2B** | 2.6B | 27.5% | 27.8% | +0.3% | 19.5% | 19.8% | Null |
+| **Gemma 3 1B** | 1.0B | 19.0% | 19.2% | +0.2% | 7.8% | 8.0% | Null |
+| **Qwen-VL 2B** | 2.0B | 19.8% | 20.0% | +0.2% | 4.8% | 4.5% | Null |
+| **SmolLM 1.7B** | 1.7B | 18.0% | 17.8% | -0.2% | ~80% | ~80% | Null |
+| **Phi 3.5** | 3.8B | 56.0% | 55.8% | -0.2% | <1% | <1% | Null (Ceiling) |
+| **SmolLM 360M** | 0.36B | 0.0% | 0.0% | 0.0% | 100% | 100% | Failure (Too small) |
 
 **Key Insights:**
-1.  **Qwen-Coder 0.5B** reinforces the Qwen 0.5B finding: small, instruction-following models are highly steerable. The code training likely helps with HTML parsing (+7% gain).
-2.  **Size Floor:** **SmolLM 360M** appears *too* small. It fails to understand the basic instruction ("output an action") and instead repeats the HTML prompt. Steering cannot inject this fundamental capability.
-3.  **Architecture Matters:** Llama-based models (TinyLlama, Llama 1B) consistently suffer from zero-shot formatting failures that steering only partially patches. Qwen models are natively more compliant.
+1.  **Steerability correlates with Parse Failure:** Models with high parse failure rates (Qwen 0.5B, Llama 1B) show the largest gains (+4% to +14%). Steering primarily acts as a **soft alignment patch**, correcting formatting issues that prevent the model from expressing valid actions.
+2.  **Stability = Rigidity:** Models with 0% parse failure (Qwen 1.5B, Phi 3.5) are highly stable and resistant to steering. Their action-space representation is already robust, leaving "no room" for the steering vector to improve selection accuracy.
+3.  **Gemma 3 Exception:** Gemma 3 1B is an outlier. Despite being small (1B) and having some parse failures (7.8%), it showed negligible improvement (+0.2%) across all 26 layers. This suggests its architecture or training makes its representations particularly rigid compared to Llama or Qwen models of similar size.
 
 ### Refined Hypothesis
 
