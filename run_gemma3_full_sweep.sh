@@ -6,6 +6,8 @@
 set -e
 export HF_HOME="/home/deeplearning01/.cache/huggingface"
 export CUDA_VISIBLE_DEVICES=1
+# Ensure token is available for gated repo checks
+export HF_TOKEN=$(cat /mnt/code/huggingface/token)
 
 MODEL="gemma-1b"
 PROMPT_TYPE="accuracy"
