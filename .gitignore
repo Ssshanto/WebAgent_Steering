@@ -8,3 +8,14 @@ data/
 dataset_cache/
 local_run_log.md
 vectors/
+GEMINI.md
+presentation_tmp/
+
+# Working notes and archives (keep local)
+docs/
+archive/
+*.tmp
+*.swp
+.vscode/
+.idea/
+*.log
