@@ -10,6 +10,39 @@ Investigate whether **representation engineering (model steering)** can improve 
 
 ---
 
+## Implementation Updates
+
+### Migration to BrowserGym (2025-02-02)
+
+**Migrated from direct MiniWob++ to BrowserGym framework** for improved stability, richer observations, and unified benchmark API.
+
+**Key Changes:**
+- **Browser Backend**: Playwright (BrowserGym) instead of Selenium (direct MiniWob++)
+- **Element IDs**: `bid` (BrowserGym ID) instead of `ref` (MiniWob++ reference)
+- **Action Format**: String-based actions `click("N")` instead of `ActionTypes.CLICK_ELEMENT`
+- **Observations**: Rich DOM objects with `obs["goal"]` instead of simple `obs["utterance"]`
+- **DOM Processing**: `flatten_dom_to_str()` utility instead of custom `dom_to_html()`
+
+**Dependencies Updated:**
+- `miniwob` → `browsergym-miniwob`
+- Added: `beautifulsoup4`, `lxml` for DOM parsing
+- Playwright browser: `playwright install chromium`
+
+**Benefits:**
+- More stable browser automation
+- Better error handling with `obs["last_action_error"]`
+- Accessibility tree available for richer observations
+- Easy expansion to WebArena, WorkArena, VisualWebArena benchmarks
+- Active development and maintenance
+
+**Research Continuity:**
+- Steering vector computation logic unchanged
+- Same contrastive prompt methodology
+- Model architectures and layer selection unchanged
+- Experimental reproducibility maintained through versioning
+
+---
+
 ## Methodology
 
 ### Contrastive Activation Addition (CAA)

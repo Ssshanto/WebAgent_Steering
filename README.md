@@ -2,6 +2,8 @@
 
 Zero-shot steering of LLM web agents using Contrastive Activation Addition (CAA).
 
+**Now using BrowserGym** - A unified framework for web agent benchmarks with improved stability and features.
+
 ## Hypothesis
 
 **Steering can improve LLM web agent performance by enhancing action-space understanding** - without task-specific fine-tuning or examples.
@@ -10,28 +12,38 @@ Zero-shot steering of LLM web agents using Contrastive Activation Addition (CAA)
 
 1. **Compute steering vector** from contrastive prompt pairs (e.g., "correct action" vs "random action")
 2. **Apply vector** during inference at target layer with coefficient α
-3. **Evaluate** baseline vs steered accuracy on MiniWob++ benchmark
+3. **Evaluate** baseline vs steered accuracy on MiniWob++ benchmark via BrowserGym
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 
-# MiniWob requires Selenium + Chrome
-sudo apt-get install -y chromium-chromedriver
+# Install Playwright browser (BrowserGym uses Playwright instead of Selenium)
+playwright install chromium
+
+# Setup MiniWob++ server
+git clone https://github.com/Farama-Foundation/miniwob-plusplus.git
+cd miniwob-plusplus
+npm install
+npm run build
+npm run serve  # Runs on http://localhost:8080
+
+# Set environment variable
+export MINIWOB_URL="http://localhost:8080"
 ```
 
 ## Quick Start
 
 ```bash
 # Run experiment (default: accuracy prompt)
-./run.sh
+python src/miniwob_steer.py
 
 # Test different steering prompts
-./run.sh action      # Action-grounded: target decision-making
-./run.sh grounding   # Task-DOM binding
-./run.sh precision   # Element matching
-./run.sh format      # Output compliance
+python src/miniwob_steer.py --prompt-type action      # Action-grounded: target decision-making
+python src/miniwob_steer.py --prompt-type grounding   # Task-DOM binding
+python src/miniwob_steer.py --prompt-type precision   # Element matching
+python src/miniwob_steer.py --prompt-type format      # Output compliance
 ```
 
 ## Steering Prompts
@@ -76,6 +88,22 @@ Results saved to JSONL with per-episode records:
 - `task`, `seed`: Episode info
 - `base_output`, `base_success`: Baseline performance
 - `steer_output`, `steer_success`: Steered performance
+
+## Migration to BrowserGym
+
+This project has been migrated from direct MiniWob++ usage to **BrowserGym** for improved stability and features:
+
+- **Browser Backend**: Now uses Playwright instead of Selenium for more reliable automation
+- **Richer Observations**: Includes DOM object, accessibility tree, screenshots, and error feedback
+- **Element IDs**: Uses `bid` (BrowserGym ID) attributes instead of `ref`
+- **Action Format**: High-level string actions: `click("N")`, `fill("N", "text")`
+- **Unified API**: Same interface works across MiniWob++, WebArena, WorkArena, and other benchmarks
+
+### Key Changes:
+- Element references changed from `ref` to `bid` in prompts and code
+- Actions now use BrowserGym string format instead of ActionTypes enum
+- DOM processing uses `flatten_dom_to_str()` utility
+- No more Selenium driver monkeypatching needed
 
 ## Files
 
