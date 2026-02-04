@@ -259,6 +259,7 @@ def run_sweep(args):
             args.max_new_tokens,
             run_output_path,
             base_only=args.base_only,
+            eval_seed=args.seed,
         )
 
         # Append to summary

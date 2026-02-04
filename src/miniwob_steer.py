@@ -1149,7 +1149,16 @@ def compute_vector(
 # =============================================================================
 
 
-def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only=False):
+def evaluate(
+    model,
+    tasks,
+    steps,
+    max_elems,
+    max_new_tokens,
+    out_path,
+    base_only=False,
+    eval_seed=0,
+):
     """Evaluate model on tasks, comparing baseline vs steered."""
     base_hits = 0
     steer_hits = 0
@@ -1160,11 +1169,13 @@ def evaluate(model, tasks, steps, max_elems, max_new_tokens, out_path, base_only
     pbar = tqdm(total=steps, desc="Evaluating")
     steps_per_task = max(1, steps // len(tasks))
 
+    seed_rng = random.Random(eval_seed)
+
     with open(out_path, "w", encoding="utf-8") as f:
         for task in tasks:
             env = gym.make(f"browsergym/miniwob.{task}")
             for _ in range(steps_per_task):
-                seed = random.randint(0, 2**31 - 1)
+                seed = seed_rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed)
 
                 # Get prompt and image based on model type
@@ -1379,7 +1390,16 @@ def main():
                 raise RuntimeError(f"Failed to load vector for layer {layer_idx}")
 
     # Evaluate
-    results = evaluate(model, tasks, args.eval_steps, 80, 80, args.out, args.base_only)
+    results = evaluate(
+        model,
+        tasks,
+        args.eval_steps,
+        80,
+        80,
+        args.out,
+        args.base_only,
+        eval_seed=args.seed,
+    )
 
     # Print results
     print("\n" + "=" * 50)
