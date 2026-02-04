@@ -350,6 +350,16 @@ def list_miniwob_tasks():
     return sorted(tasks)
 
 
+def normalize_miniwob_url():
+    """Ensure MINIWOB_URL ends with a trailing slash if set."""
+    url = os.environ.get("MINIWOB_URL")
+    if not url:
+        return
+    url = url.strip()
+    if url and not url.endswith("/"):
+        os.environ["MINIWOB_URL"] = url + "/"
+
+
 # =============================================================================
 # SYSTEM PROMPT (Unified, Format-Neutral)
 # =============================================================================
@@ -1301,6 +1311,8 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+
+    normalize_miniwob_url()
 
     # BrowserGym environments are registered automatically when importing browsergym.miniwob
     # No need for gym.register_envs() like with miniwob package

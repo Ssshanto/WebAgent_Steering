@@ -30,7 +30,7 @@ npm run build
 npm run serve  # Runs on http://localhost:8080
 
 # Set environment variable
-export MINIWOB_URL="http://localhost:8080"
+export MINIWOB_URL="http://localhost:8080/"
 ```
 
 ## Quick Start
