@@ -339,6 +339,39 @@ def load_vlm(model_id):
 # =============================================================================
 
 
+# Tasks that are visually/spatially grounded and unfair for text-only agents.
+# Keep this list explicit for peer-review defensibility.
+EXCLUDED_TASKS = {
+    # Geometry / spatial perception
+    "bisect-angle",
+    "circle-center",
+    "draw-circle",
+    "draw-line",
+    "right-angle",
+    # Visual attributes (color/shades/shape)
+    "click-color",
+    "click-shades",
+    "click-shape",
+    "count-shape",
+    "count-sides",
+    "identify-shape",
+    "visual-addition",
+    # Pie/segment selection
+    "click-pie",
+    "click-pie-nodelay",
+    # Drag-and-drop (spatial layout dependent)
+    "drag-box",
+    "drag-circle",
+    "drag-cube",
+    "drag-items",
+    "drag-items-grid",
+    "drag-shapes",
+    "drag-shapes-2",
+    "drag-single-shape",
+    "drag-sort-numbers",
+}
+
+
 def list_miniwob_tasks():
     """Return the full MiniWob++ task list from the Gym registry."""
     env_ids = [
@@ -347,6 +380,7 @@ def list_miniwob_tasks():
         if env_id.startswith("browsergym/miniwob.")
     ]
     tasks = [env_id.split("browsergym/miniwob.", 1)[1] for env_id in env_ids]
+    tasks = [t for t in tasks if t not in EXCLUDED_TASKS]
     return sorted(tasks)
 
 
@@ -1191,8 +1225,10 @@ def evaluate(
     total = 0
     base_total = 0
 
-    pbar = tqdm(total=steps, desc="Evaluating")
-    steps_per_task = max(1, steps // len(tasks))
+    # One-episode-per-task evaluation for fairness and consistency
+    steps_per_task = 1
+    target_episodes = len(tasks)
+    pbar = tqdm(total=target_episodes, desc="Evaluating")
 
     seed_rng = random.Random(eval_seed)
 
@@ -1305,10 +1341,10 @@ def evaluate(
                         delta=f"{(steer_acc - base_acc):+.1%}",
                     )
 
-                if pbar.n >= steps:
+                if pbar.n >= target_episodes:
                     break
             env.close()
-            if pbar.n >= steps:
+            if pbar.n >= target_episodes:
                 break
     pbar.close()
 
