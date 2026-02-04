@@ -1149,6 +1149,23 @@ def compute_vector(
 # =============================================================================
 
 
+def load_base_jsonl(path):
+    """Load base results from JSONL and index by (task, seed)."""
+    base_records = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            task = record.get("task")
+            seed = record.get("seed")
+            if task is None or seed is None:
+                continue
+            base_records[(task, int(seed))] = record
+    return base_records
+
+
 def evaluate(
     model,
     tasks,
@@ -1157,14 +1174,22 @@ def evaluate(
     max_new_tokens,
     out_path,
     base_only=False,
+    steer_only=False,
     eval_seed=0,
+    base_records=None,
 ):
     """Evaluate model on tasks, comparing baseline vs steered."""
+    if base_only and steer_only:
+        raise ValueError("Cannot set both base_only and steer_only")
+    if steer_only and base_records is None:
+        raise ValueError("steer_only requires base_records")
+
     base_hits = 0
     steer_hits = 0
     parse_fails_base = 0
     parse_fails_steer = 0
     total = 0
+    base_total = 0
 
     pbar = tqdm(total=steps, desc="Evaluating")
     steps_per_task = max(1, steps // len(tasks))
@@ -1181,30 +1206,57 @@ def evaluate(
                 # Get prompt and image based on model type
                 prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
 
-                # Baseline
-                if image is not None:
-                    base_out = model.generate(
-                        prompt, steer=False, max_new_tokens=max_new_tokens, image=image
-                    )
+                record = {"task": task, "seed": seed}
+                base_success = None
+
+                if steer_only:
+                    assert base_records is not None
+                    base_record = base_records.get((task, seed))
+                    if base_record is not None:
+                        assert base_record is not None
+                        base_action = base_record.get("base_action")
+                        base_success = base_record.get("base_success")
+                        record.update(
+                            {
+                                "base_output": base_record.get("base_output"),
+                                "base_action": base_action,
+                                "base_success": base_success,
+                            }
+                        )
+                        if base_success is not None:
+                            base_hits += int(base_success)
+                            base_total += 1
+                        if base_action is None:
+                            parse_fails_base += 1
                 else:
-                    base_out = model.generate(
-                        prompt, steer=False, max_new_tokens=max_new_tokens
+                    # Baseline
+                    if image is not None:
+                        base_out = model.generate(
+                            prompt,
+                            steer=False,
+                            max_new_tokens=max_new_tokens,
+                            image=image,
+                        )
+                    else:
+                        base_out = model.generate(
+                            prompt, steer=False, max_new_tokens=max_new_tokens
+                        )
+
+                    base_action = parse_action(base_out)
+                    base_reward, _ = step_env(env, base_action)
+                    base_success = base_reward > 0
+                    base_hits += int(base_success)
+                    base_total += 1
+                    if base_action is None:
+                        parse_fails_base += 1
+
+                    record.update(
+                        {
+                            "base_output": base_out,
+                            "base_action": base_action,
+                            "base_success": base_success,
+                        }
                     )
-
-                base_action = parse_action(base_out)
-                base_reward, _ = step_env(env, base_action)
-                base_success = base_reward > 0
-                base_hits += int(base_success)
-                if base_action is None:
-                    parse_fails_base += 1
-
-                record = {
-                    "task": task,
-                    "seed": seed,
-                    "base_output": base_out,
-                    "base_action": base_action,
-                    "base_success": base_success,
-                }
 
                 if not base_only:
                     # Steered - reset and get prompt/image again
@@ -1243,12 +1295,14 @@ def evaluate(
                 pbar.update(1)
 
                 if base_only:
-                    pbar.set_postfix(acc=f"{base_hits / total:.1%}")
+                    pbar.set_postfix(acc=f"{base_hits / max(1, base_total):.1%}")
                 else:
+                    base_acc = base_hits / max(1, base_total)
+                    steer_acc = steer_hits / max(1, total)
                     pbar.set_postfix(
-                        base=f"{base_hits / total:.1%}",
-                        steer=f"{steer_hits / total:.1%}",
-                        delta=f"{(steer_hits - base_hits) / total:+.1%}",
+                        base=f"{base_acc:.1%}",
+                        steer=f"{steer_acc:.1%}",
+                        delta=f"{(steer_acc - base_acc):+.1%}",
                     )
 
                 if pbar.n >= steps:
@@ -1258,14 +1312,14 @@ def evaluate(
                 break
     pbar.close()
 
-    base_acc = base_hits / max(1, total)
+    base_acc = base_hits / max(1, base_total)
     steer_acc = steer_hits / max(1, total) if not base_only else 0
 
     return {
         "base_accuracy": base_acc,
         "steer_accuracy": steer_acc,
         "improvement": steer_acc - base_acc,
-        "base_parse_fail": parse_fails_base / max(1, total),
+        "base_parse_fail": parse_fails_base / max(1, base_total),
         "steer_parse_fail": parse_fails_steer / max(1, total) if not base_only else 0,
         "total_episodes": total,
     }
@@ -1298,6 +1352,16 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
         "--base-only", action="store_true", help="Evaluate baseline only"
+    )
+    parser.add_argument(
+        "--steer-only",
+        action="store_true",
+        help="Evaluate steered only (requires --base-jsonl)",
+    )
+    parser.add_argument(
+        "--base-jsonl",
+        default=None,
+        help="Path to baseline JSONL for steer-only mode",
     )
     parser.add_argument(
         "--vlm", action="store_true", help="Enable VLM mode (screenshot + SoM)"
@@ -1333,6 +1397,15 @@ def main():
         tasks = list_miniwob_tasks()
     else:
         tasks = [t.strip() for t in args.tasks.split(",")]
+
+    if args.base_only and args.steer_only:
+        raise ValueError("Cannot set both --base-only and --steer-only")
+
+    base_records = None
+    if args.steer_only:
+        if not args.base_jsonl:
+            raise ValueError("--steer-only requires --base-jsonl")
+        base_records = load_base_jsonl(args.base_jsonl)
 
     # Initialize model
     print(f"Model: {args.model} ({MODEL_MAP[args.model]})")
@@ -1398,7 +1471,9 @@ def main():
         80,
         args.out,
         args.base_only,
+        args.steer_only,
         eval_seed=args.seed,
+        base_records=base_records,
     )
 
     # Print results

@@ -29,6 +29,7 @@ from miniwob_steer import (
     SteeredVLM,
     compute_vector,
     evaluate,
+    load_base_jsonl,
     list_miniwob_tasks,
     normalize_miniwob_url,
     get_layer,
@@ -77,6 +78,15 @@ def run_sweep(args):
         tasks = list_miniwob_tasks()
     else:
         tasks = [t.strip() for t in args.tasks.split(",")]
+
+    if args.base_only and args.steer_only:
+        raise ValueError("Cannot set both --base-only and --steer-only")
+
+    base_records = None
+    if args.steer_only:
+        if not args.base_jsonl:
+            raise ValueError("--steer-only requires --base-jsonl")
+        base_records = load_base_jsonl(args.base_jsonl)
 
     print(f"Tasks: {len(tasks)} selected")
 
@@ -259,7 +269,9 @@ def run_sweep(args):
             args.max_new_tokens,
             run_output_path,
             base_only=args.base_only,
+            steer_only=args.steer_only,
             eval_seed=args.seed,
+            base_records=base_records,
         )
 
         # Append to summary
@@ -383,6 +395,16 @@ def main():
         "--base-only",
         action="store_true",
         help="Evaluate baseline only",
+    )
+    parser.add_argument(
+        "--steer-only",
+        action="store_true",
+        help="Evaluate steered only (requires --base-jsonl)",
+    )
+    parser.add_argument(
+        "--base-jsonl",
+        default=None,
+        help="Path to baseline JSONL for steer-only mode",
     )
     parser.add_argument(
         "--max-new-tokens",
