@@ -68,6 +68,7 @@ python src/miniwob_steer.py --prompt-type format      # Output compliance
 | `--vector-method` | response | Vector computation method |
 | `--train-steps` | 200 | Episodes for vector computation |
 | `--eval-steps` | 400 | Episodes for evaluation |
+| `--tasks` | all | Task list or 'all' |
 | `--seed` | 0 | Random seed |
 
 ## CLI Usage
@@ -88,6 +89,10 @@ Results saved to JSONL with per-episode records:
 - `task`, `seed`: Episode info
 - `base_output`, `base_success`: Baseline performance
 - `steer_output`, `steer_success`: Steered performance
+
+## Task Set
+
+`--tasks all` uses the full MiniWob++ task set from the BrowserGym registry (no custom subset).
 
 ## Migration to BrowserGym
 

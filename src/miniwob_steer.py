@@ -338,38 +338,17 @@ def load_vlm(model_id):
 # TASK CONFIGURATION
 # =============================================================================
 
-# All supported MiniWob++ tasks
-TASKS = [
-    # Click tasks
-    "click-test",
-    "click-test-2",
-    "click-test-transfer",
-    "click-button",
-    "click-link",
-    "click-color",
-    "click-dialog",
-    "click-dialog-2",
-    "click-pie",
-    "click-pie-nodelay",
-    "click-shape",
-    "click-tab",
-    "click-widget",
-    "click-checkboxes",
-    "click-option",
-    # Type tasks
-    "focus-text",
-    "focus-text-2",
-    "unicode-test",
-    "enter-date",
-    "enter-time",
-    # Selection tasks
-    "choose-list",
-    "choose-date",
-    # Other tasks
-    "grid-coordinate",
-    "identify-shape",
-    "guess-number",
-]
+
+def list_miniwob_tasks():
+    """Return the full MiniWob++ task list from the Gym registry."""
+    env_ids = [
+        env_id
+        for env_id in gym.envs.registry.keys()
+        if env_id.startswith("browsergym/miniwob.")
+    ]
+    tasks = [env_id.split("browsergym/miniwob.", 1)[1] for env_id in env_ids]
+    return sorted(tasks)
+
 
 # =============================================================================
 # SYSTEM PROMPT (Unified, Format-Neutral)
@@ -388,13 +367,6 @@ ACTION_FORMAT = (
     "- click bid=<int>\n"
     '- type bid=<int> text="<text>"\n'
     '- select bid=<int> option="<text>"'
-)
-
-ACTION_FORMAT = (
-    "Available actions:\n"
-    "- click ref=<int>\n"
-    '- type ref=<int> text="<text>"\n'
-    '- select ref=<int> option="<text>"'
 )
 
 # =============================================================================
@@ -1335,7 +1307,7 @@ def main():
 
     # Select tasks
     if args.tasks == "all":
-        tasks = TASKS
+        tasks = list_miniwob_tasks()
     else:
         tasks = [t.strip() for t in args.tasks.split(",")]
 

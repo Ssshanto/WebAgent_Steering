@@ -22,6 +22,7 @@ Investigate whether **representation engineering (model steering)** can improve 
 - **Action Format**: String-based actions `click("N")` instead of `ActionTypes.CLICK_ELEMENT`
 - **Observations**: Rich DOM objects with `obs["goal"]` instead of simple `obs["utterance"]`
 - **DOM Processing**: `flatten_dom_to_str()` utility instead of custom `dom_to_html()`
+- **Task Set**: Full MiniWob++ task list from BrowserGym registry (no custom subset)
 
 **Dependencies Updated:**
 - `miniwob` → `browsergym-miniwob`
