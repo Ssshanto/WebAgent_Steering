@@ -406,7 +406,7 @@ SYSTEM_PROMPT = (
     "Rules:\n"
     "- Output only action commands, one per line\n"
     "- No explanations, no reasoning, no markdown\n"
-    '- Format: click bid=N | type bid=N text="..." | select bid=N option="..."'
+    "- Format: one action per line as described below"
 )
 
 ACTION_FORMAT = (
