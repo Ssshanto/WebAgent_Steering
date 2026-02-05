@@ -21,6 +21,7 @@ import re
 
 import gymnasium as gym
 import browsergym.miniwob
+from browsergym.core.action.parsers import NamedArgument, highlevel_action_parser
 import numpy as np
 import torch
 from browsergym.utils.obs import flatten_dom_to_str, flatten_axtree_to_str
@@ -411,9 +412,10 @@ SYSTEM_PROMPT = (
 
 ACTION_FORMAT = (
     "Available actions:\n"
-    "- click bid=<int>\n"
-    '- type bid=<int> text="<text>"\n'
-    '- select bid=<int> option="<text>"'
+    '- click("<bid>")\n'
+    '- fill("<bid>", "<text>")\n'
+    '- select("<bid>", "<option>")  # alias of fill\n'
+    "- noop()"
 )
 
 # =============================================================================
@@ -873,43 +875,61 @@ def build_vlm_prompt(obs):
 
 
 def parse_action(text):
-    """Parse action(s) from model output. Returns list of actions or None.
+    """Parse BrowserGym-style actions from model output.
 
-    Uses lenient parsing (re.match) to tolerate trailing characters like pipes,
-    consistent with standard web agent benchmarks (WebArena, Mind2Web, SeeAct).
-
-    Now parses actions with 'bid=' instead of 'ref=' to match BrowserGym format.
+    Expected format: click("<bid>") / fill("<bid>", "<text>") / select("<bid>", "<option>")
+    Uses BrowserGym's highlevel_action_parser for robust parsing.
     """
-    lines = [ln.strip() for ln in text.strip().splitlines() if ln.strip()]
-    if not lines:
+    if not text or not text.strip():
+        return None
+
+    try:
+        parsed = highlevel_action_parser.parse_string(text, parse_all=True)
+    except Exception:
         return None
 
     actions = []
-    for line in lines:
-        # Click - matches from start, tolerates trailing characters
-        match = re.match(r"click\s+bid=(\d+)", line, flags=re.IGNORECASE)
-        if match:
-            actions.append({"action": "CLICK", "bid": int(match.group(1))})
+    for call in parsed:
+        if not call:
+            continue
+        func = str(call[0]).lower()
+        args = call[1] if len(call) > 1 else []
+
+        positional = []
+        named = {}
+        for arg in args:
+            if isinstance(arg, NamedArgument):
+                named[arg.name] = arg.value
+            else:
+                positional.append(arg)
+
+        if func == "noop":
+            actions.append({"action": "NOOP"})
             continue
 
-        # Type - matches from start, tolerates trailing characters
-        match = re.match(r'type\s+bid=(\d+)\s+text="(.*?)"', line, flags=re.IGNORECASE)
-        if match:
-            actions.append(
-                {"action": "TYPE", "bid": int(match.group(1)), "text": match.group(2)}
-            )
+        if func == "click":
+            bid = named.get("bid") if named else None
+            if bid is None and positional:
+                bid = positional[0]
+            if bid is None:
+                continue
+            actions.append({"action": "CLICK", "bid": int(bid)})
             continue
 
-        # Select - matches from start, tolerates trailing characters
-        match = re.match(
-            r'select\s+bid=(\d+)\s+option="(.*?)"', line, flags=re.IGNORECASE
-        )
-        if match:
+        if func in ("fill", "select"):
+            bid = named.get("bid") if named else None
+            text = named.get("text") if named else None
+            if bid is None and positional:
+                bid = positional[0]
+            if text is None and len(positional) > 1:
+                text = positional[1]
+            if bid is None:
+                continue
             actions.append(
                 {
-                    "action": "SELECT",
-                    "bid": int(match.group(1)),
-                    "option": match.group(2),
+                    "action": "TYPE",
+                    "bid": int(bid),
+                    "text": "" if text is None else str(text),
                 }
             )
             continue
@@ -933,12 +953,16 @@ def step_env(env, actions):
     final_terminated = False
 
     for action in actions:
+        if action["action"] == "NOOP":
+            _obs, reward, terminated, truncated, _info = env.step("noop()")
+            final_reward = reward
+            final_terminated = terminated or truncated
+            if final_terminated:
+                break
+            continue
         # Convert parsed action dict to BrowserGym string format
         if action["action"] == "CLICK":
             action_str = f'click("{action["bid"]}")'
-        elif action["action"] == "SELECT":
-            # In BrowserGym, select is done via fill/type
-            action_str = f'fill("{action["bid"]}", "{action.get("option", "")}")'
         else:  # TYPE
             action_str = f'fill("{action["bid"]}", "{action.get("text", "")}")'
 
@@ -972,11 +996,23 @@ def _get_prompt_and_image(model, obs, env, max_elems):
         return prompt, None
 
 
+def _get_hidden_state_offset(model, states):
+    """Return offset so hidden_states[offset] maps to block 0."""
+    if model.is_vlm:
+        num_layers = len(model._get_llm_layers())
+    else:
+        num_layers = len(get_model_layers(model.model, model.model_key))
+    num_states = len(states)
+    if num_states < num_layers:
+        raise ValueError("hidden_states shorter than model layers")
+    return num_states - num_layers
+
+
 def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
     """Compute activation difference for a contrastive pair across all layers.
 
     Returns:
-        dict: Mapping layer_idx -> activation difference (numpy array)
+        dict: Mapping block_idx -> activation difference (numpy array)
     """
     if model.vector_method == "prompt":
         # Standard CAA: Extract from prompt
@@ -1003,13 +1039,16 @@ def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
         pos_states = model._last_token_state(pos_text)
         neg_states = model._last_token_state(neg_text)
 
-    # pos_states and neg_states are tuples of tensors (one per layer)
-    # Compute difference for each layer
+    # Align hidden_states indices to transformer block indices
+    offset = _get_hidden_state_offset(model, pos_states)
+    num_layers = len(pos_states) - offset
+
     diffs = {}
-    for layer_idx in range(len(pos_states)):
-        pos_layer = pos_states[layer_idx][0, -1].float().cpu().numpy()
-        neg_layer = neg_states[layer_idx][0, -1].float().cpu().numpy()
-        diffs[layer_idx] = pos_layer - neg_layer
+    for block_idx in range(num_layers):
+        state_idx = block_idx + offset
+        pos_layer = pos_states[state_idx][0, -1].float().cpu().numpy()
+        neg_layer = neg_states[state_idx][0, -1].float().cpu().numpy()
+        diffs[block_idx] = pos_layer - neg_layer
 
     return diffs
 
@@ -1041,6 +1080,8 @@ def compute_vector(
         seed: Random seed for cache path
     """
 
+    rng = random.Random(seed)
+
     if prompt_type == "combined":
         print(
             "Computing Combined Vector for all layers (format_accuracy + composite_1)..."
@@ -1054,7 +1095,7 @@ def compute_vector(
         for task in tasks:
             env = gym.make(f"browsergym/miniwob.{task}")
             for _ in range(steps_per_task):
-                seed_val = random.randint(0, 2**31 - 1)
+                seed_val = rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed_val)
 
                 # Get prompt and image based on model type
@@ -1097,11 +1138,17 @@ def compute_vector(
             vec_a = vec_a_sums[layer_idx] / max(1, pbar.n)
             vec_b = vec_b_sums[layer_idx] / max(1, pbar.n)
 
-            vec_a = vec_a / np.linalg.norm(vec_a)
-            vec_b = vec_b / np.linalg.norm(vec_b)
+            norm_a = np.linalg.norm(vec_a)
+            norm_b = np.linalg.norm(vec_b)
+            if norm_a > 0:
+                vec_a = vec_a / norm_a
+            if norm_b > 0:
+                vec_b = vec_b / norm_b
 
             combined = vec_a + vec_b
-            combined = combined / np.linalg.norm(combined)
+            norm_c = np.linalg.norm(combined)
+            if norm_c > 0:
+                combined = combined / norm_c
             all_vectors[layer_idx] = combined
 
         # Save all vectors to cache
@@ -1132,7 +1179,7 @@ def compute_vector(
     for task in tasks:
         env = gym.make(f"browsergym/miniwob.{task}")
         for _ in range(steps_per_task):
-            seed_val = random.randint(0, 2**31 - 1)
+            seed_val = rng.randint(0, 2**31 - 1)
             obs, _ = env.reset(seed=seed_val)
 
             # Get prompt and image based on model type
@@ -1228,9 +1275,9 @@ def evaluate(
     total = 0
     base_total = 0
 
-    # One-episode-per-task evaluation for fairness and consistency
-    steps_per_task = 1
-    target_episodes = len(tasks)
+    # Three-episodes-per-task evaluation for fairness and consistency
+    steps_per_task = 3
+    target_episodes = len(tasks) * steps_per_task
     pbar = tqdm(total=target_episodes, desc="Evaluating")
 
     seed_rng = random.Random(eval_seed)
