@@ -913,7 +913,7 @@ def parse_action(text):
                 bid = positional[0]
             if bid is None:
                 continue
-            actions.append({"action": "CLICK", "bid": int(bid)})
+            actions.append({"action": "CLICK", "bid": str(bid)})
             continue
 
         if func in ("fill", "select"):
@@ -928,7 +928,7 @@ def parse_action(text):
             actions.append(
                 {
                     "action": "TYPE",
-                    "bid": int(bid),
+                    "bid": str(bid),
                     "text": "" if text is None else str(text),
                 }
             )
