@@ -37,6 +37,7 @@ MODEL_MAP = {
     # Qwen family (original)
     "0.5b": "Qwen/Qwen2.5-0.5B-Instruct",
     "3b": "Qwen/Qwen2.5-3B-Instruct",
+    "qwen-7b": "Qwen/Qwen2.5-7B-Instruct",
     # Qwen family (extended)
     "qwen-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
     "qwen-coder-0.5b": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
@@ -60,6 +61,7 @@ MODEL_MAP = {
 LAYER_MAP = {
     "0.5b": 11,  # 24 layers → L11 (46%)
     "3b": 18,  # 36 layers → L18 (50%)
+    "qwen-7b": 16,  # 32 layers → L16 (50%)
     "qwen-1.5b": 14,  # 28 layers → L14 (50%)
     "qwen-coder-0.5b": 11,  # 24 layers → L11 (46%)
     "llama-1b": 8,  # 16 layers → L8 (50%)
@@ -81,6 +83,7 @@ MODEL_ARCH = {
     # Qwen/Llama-style: model.model.layers
     "0.5b": "qwen",
     "3b": "qwen",
+    "qwen-7b": "qwen",
     "qwen-1.5b": "qwen",
     "qwen-coder-0.5b": "qwen",
     "llama-1b": "llama",
