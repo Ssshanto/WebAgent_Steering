@@ -28,6 +28,8 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
   exit 1
 fi
 
+MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/miniwob/}"
+
 if [[ ! -f "${PLAN_JSON}" ]]; then
   mkdir -p "$(dirname "${PLAN_JSON}")"
   py - <<'PY'
@@ -120,7 +122,7 @@ for idx in "${!models[@]}"; do
     echo "[skip] baseline complete: ${model}"
   else
     echo "[run] baseline: ${model}"
-    run_cmd env MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/}" CUDA_VISIBLE_DEVICES=0 \
+    run_cmd env MINIWOB_URL="${MINIWOB_URL}" CUDA_VISIBLE_DEVICES=0 \
       "${PYTHON_BIN}" "${ROOT_DIR}/scripts/run_sweep.py" \
       --model "${model}" \
       --layers "${middle1}" \
@@ -139,7 +141,7 @@ for idx in "${!models[@]}"; do
     echo "[skip] steer complete: ${model}"
   else
     echo "[run] steer alpha=3 layers=${middle6}: ${model}"
-    run_cmd env MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/}" CUDA_VISIBLE_DEVICES=0 \
+    run_cmd env MINIWOB_URL="${MINIWOB_URL}" CUDA_VISIBLE_DEVICES=0 \
       "${PYTHON_BIN}" "${ROOT_DIR}/scripts/run_sweep.py" \
       --model "${model}" \
       --layers "${middle6}" \
