@@ -29,6 +29,9 @@ if [[ ! -x "${PYTHON_BIN}" ]]; then
 fi
 
 MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/miniwob/}"
+if [[ "${MINIWOB_URL}" == "http://localhost:8080/" ]]; then
+  MINIWOB_URL="http://localhost:8080/miniwob/"
+fi
 
 if [[ ! -f "${PLAN_JSON}" ]]; then
   mkdir -p "$(dirname "${PLAN_JSON}")"
