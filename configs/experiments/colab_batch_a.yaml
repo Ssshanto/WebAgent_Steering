@@ -1,0 +1,99 @@
+queue_id: "colab_batch_a"
+description: "Batch A: steering prompt variations (layer x alpha x prompt_type matrix)"
+
+jobs:
+  - id: "job_0_L10_a1.0_accuracy"
+    model: "0.5b"
+    layer: 10
+    alpha: 1.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_0"
+
+  - id: "job_1_L10_a2.0_accuracy"
+    model: "0.5b"
+    layer: 10
+    alpha: 2.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_1"
+
+  - id: "job_2_L14_a1.0_accuracy"
+    model: "0.5b"
+    layer: 14
+    alpha: 1.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_2"
+
+  - id: "job_3_L14_a2.0_accuracy"
+    model: "0.5b"
+    layer: 14
+    alpha: 2.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_3"
+
+  - id: "job_4_L14_a3.0_accuracy"
+    model: "0.5b"
+    layer: 14
+    alpha: 3.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_4"
+
+  - id: "job_5_L14_a4.0_accuracy"
+    model: "0.5b"
+    layer: 14
+    alpha: 4.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_5"
+
+  - id: "job_6_L14_a2.0_action"
+    model: "0.5b"
+    layer: 14
+    alpha: 2.0
+    prompt_type: "action"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_6"
+
+  - id: "job_7_L14_a2.0_grounding"
+    model: "0.5b"
+    layer: 14
+    alpha: 2.0
+    prompt_type: "grounding"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_7"
+
+  - id: "job_8_L14_a2.0_precision"
+    model: "0.5b"
+    layer: 14
+    alpha: 2.0
+    prompt_type: "precision"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_8"
+
+  - id: "job_9_L18_a2.0_accuracy"
+    model: "0.5b"
+    layer: 18
+    alpha: 2.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_9"
+
+  - id: "job_10_L18_a3.0_accuracy"
+    model: "0.5b"
+    layer: 18
+    alpha: 3.0
+    prompt_type: "accuracy"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_10"
+
+  - id: "job_11_L18_a2.0_action"
+    model: "0.5b"
+    layer: 18
+    alpha: 2.0
+    prompt_type: "action"
+    tasks: "all"
+    output_dir: "results/colab_batch_a/job_11"
