@@ -14,8 +14,14 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 py() {
-  conda run -n "${CONDA_ENV}" python "$@"
+  python "$@"
 }
+
+if [[ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]]; then
+  # shellcheck disable=SC1091
+  source "${HOME}/anaconda3/etc/profile.d/conda.sh"
+fi
+conda activate "${CONDA_ENV}"
 
 if [[ ! -f "${PLAN_JSON}" ]]; then
   mkdir -p "$(dirname "${PLAN_JSON}")"
@@ -98,7 +104,7 @@ for idx in "${!models[@]}"; do
       echo "[dry-run] prefetch next model on CPU: ${next_model} (${next_model_id})"
     else
       echo "[prefetch] ${next_model} on CPU"
-      CUDA_VISIBLE_DEVICES='' conda run -n "${CONDA_ENV}" python -c "from transformers import AutoTokenizer,AutoModelForCausalLM; m='${next_model_id}'; AutoTokenizer.from_pretrained(m); AutoModelForCausalLM.from_pretrained(m); print('prefetch_ok', m)" > "${prefetch_log}" 2>&1 &
+      CUDA_VISIBLE_DEVICES='' python -c "from transformers import AutoTokenizer,AutoModelForCausalLM; m='${next_model_id}'; AutoTokenizer.from_pretrained(m); AutoModelForCausalLM.from_pretrained(m); print('prefetch_ok', m)" > "${prefetch_log}" 2>&1 &
     fi
   fi
 
@@ -110,7 +116,7 @@ for idx in "${!models[@]}"; do
   else
     echo "[run] baseline: ${model}"
     run_cmd env MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/}" CUDA_VISIBLE_DEVICES=0 \
-      conda run -n "${CONDA_ENV}" python "${ROOT_DIR}/scripts/run_sweep.py" \
+      python "${ROOT_DIR}/scripts/run_sweep.py" \
       --model "${model}" \
       --layers "${middle1}" \
       --alphas "0" \
@@ -129,7 +135,7 @@ for idx in "${!models[@]}"; do
   else
     echo "[run] steer alpha=3 layers=${middle6}: ${model}"
     run_cmd env MINIWOB_URL="${MINIWOB_URL:-http://localhost:8080/}" CUDA_VISIBLE_DEVICES=0 \
-      conda run -n "${CONDA_ENV}" python "${ROOT_DIR}/scripts/run_sweep.py" \
+      python "${ROOT_DIR}/scripts/run_sweep.py" \
       --model "${model}" \
       --layers "${middle6}" \
       --alphas "3.0" \
