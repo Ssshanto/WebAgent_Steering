@@ -42,6 +42,11 @@ MODEL_MAP = {
     # Qwen family (extended)
     "qwen-1.5b": "Qwen/Qwen2.5-1.5B-Instruct",
     "qwen-coder-0.5b": "Qwen/Qwen2.5-Coder-0.5B-Instruct",
+    # Qwen3 family
+    "qwen3-0.6b": "Qwen/Qwen3-0.6B",
+    "qwen3-1.7b": "Qwen/Qwen3-1.7B",
+    "qwen3-4b": "Qwen/Qwen3-4B",
+    "qwen3-8b": "Qwen/Qwen3-8B",
     # Llama family
     "llama-1b": "meta-llama/Llama-3.2-1B-Instruct",
     "llama-3b": "meta-llama/Llama-3.2-3B-Instruct",
@@ -87,6 +92,10 @@ MODEL_ARCH = {
     "qwen-7b": "qwen",
     "qwen-1.5b": "qwen",
     "qwen-coder-0.5b": "qwen",
+    "qwen3-0.6b": "qwen",
+    "qwen3-1.7b": "qwen",
+    "qwen3-4b": "qwen",
+    "qwen3-8b": "qwen",
     "llama-1b": "llama",
     "llama-3b": "llama",
     "gemma-2b": "gemma",

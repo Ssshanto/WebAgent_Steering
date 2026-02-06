@@ -151,8 +151,10 @@ def build_command(job_config: Dict[str, Any]) -> str:
     # Field mapping
     field_map = {
         "model": "--model",
-        "layer": "--layer",
+        "layer": "--layers",
+        "layers": "--layers",
         "alpha": "--alphas",
+        "alphas": "--alphas",
         "prompt_type": "--prompt-type",
         "vector_method": "--vector-method",
         "train_steps": "--train-steps",
