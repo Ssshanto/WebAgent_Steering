@@ -33,6 +33,10 @@ if [[ "${MINIWOB_URL}" == "http://localhost:8080/" ]]; then
   MINIWOB_URL="http://localhost:8080/miniwob/"
 fi
 
+echo "[config] CONDA_ENV=${CONDA_ENV}"
+echo "[config] PYTHON_BIN=${PYTHON_BIN}"
+echo "[config] MINIWOB_URL=${MINIWOB_URL}"
+
 if [[ ! -f "${PLAN_JSON}" ]]; then
   mkdir -p "$(dirname "${PLAN_JSON}")"
   py - <<'PY'
