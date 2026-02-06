@@ -21,7 +21,12 @@ if [[ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]]; then
   # shellcheck disable=SC1091
   source "${HOME}/anaconda3/etc/profile.d/conda.sh"
 fi
-PYTHON_BIN="$(conda run -n "${CONDA_ENV}" python -c 'import sys; print(sys.executable)')"
+PYTHON_BIN="${PYTHON_BIN:-${HOME}/anaconda3/envs/${CONDA_ENV}/bin/python}"
+
+if [[ ! -x "${PYTHON_BIN}" ]]; then
+  echo "python binary not found for env ${CONDA_ENV}: ${PYTHON_BIN}" >&2
+  exit 1
+fi
 
 if [[ ! -f "${PLAN_JSON}" ]]; then
   mkdir -p "$(dirname "${PLAN_JSON}")"
