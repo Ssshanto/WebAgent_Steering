@@ -11,6 +11,12 @@ vectors/
 GEMINI.md
 presentation_tmp/
 
+# Colab and runtime state artifacts
+colab/
+runtime_state/
+*.queue_state.json
+.experiment_queue_state.json
+
 # Working notes and archives (keep local)
 docs/
 archive/

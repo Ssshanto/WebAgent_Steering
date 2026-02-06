@@ -83,6 +83,30 @@ python src/miniwob_steer.py \
     --out results.jsonl
 ```
 
+## Experiment Queue
+
+Batch execution with resume support for running multiple experiments sequentially:
+
+```bash
+# Initialize queue from config
+python scripts/run_experiment_queue.py init \
+    --config configs/experiments/colab_batch_a.yaml \
+    --state runtime_state/queue.json
+
+# Run queue with resume support (skip completed jobs)
+python scripts/run_experiment_queue.py run \
+    --config configs/experiments/colab_batch_a.yaml \
+    --state runtime_state/queue.json \
+    --resume
+
+# Check status
+python scripts/run_experiment_queue.py status --state runtime_state/queue.json
+```
+
+Platform-agnostic design works on Colab, local machines, or VMs. Queue code is tracked (`scripts/`, `configs/`), while Colab-specific glue goes in `colab/` (gitignored).
+
+**Colab workflow**: One manual step (attach runtime, select GPU), then run queue script to execute batch automatically.
+
 ## Output
 
 Results saved to JSONL with per-episode records:
