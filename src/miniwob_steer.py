@@ -563,12 +563,26 @@ class SteeredModel:
         # Get layers based on model architecture
         layers = get_model_layers(self.model, self.model_key)
         handle = layers[self.layer_idx].register_forward_hook(hook)
+        gen_kwargs = {
+            "max_new_tokens": max_new_tokens,
+            "eos_token_id": self.stop_token_ids,
+            "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+        }
+        if self.model_key and self.model_key.startswith("qwen3-"):
+            gen_kwargs.update(
+                {
+                    "do_sample": True,
+                    "temperature": 0.7,
+                    "top_p": 0.8,
+                    "top_k": 20,
+                }
+            )
+        else:
+            gen_kwargs["do_sample"] = False
+
         out = self.model.generate(
             **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            eos_token_id=self.stop_token_ids,
-            pad_token_id=self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
+            **gen_kwargs,
         )
         handle.remove()
 
