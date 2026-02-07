@@ -16,6 +16,7 @@ import argparse
 import json
 import os
 import random
+import re
 
 import gymnasium as gym
 import browsergym.miniwob
@@ -773,15 +774,30 @@ def _normalize_action_text(text):
     if not text:
         return "noop()"
     action = text.strip()
-    return action if action else "noop()"
+    if not action:
+        return "noop()"
+
+    action = re.sub(r"(?m)^\s*-\s+", "", action)
+    action = re.sub(r"click\(\s*(\d+)\s*\)", r'click("\1")', action)
+    action = re.sub(r"fill\(\s*(\d+)\s*,", r'fill("\1",', action)
+    action = re.sub(r"select\(\s*(\d+)\s*,", r'select("\1",', action)
+    return action
 
 
 def _single_step(env, action_text):
     try:
-        _obs, reward, terminated, truncated, _info = env.step(action_text)
-        return float(reward), bool(terminated or truncated), False
+        obs, reward, terminated, truncated, _info = env.step(action_text)
+        error_text = ""
+        if isinstance(obs, dict):
+            error_text = str(obs.get("last_action_error", "") or "")
+        return (
+            float(reward),
+            bool(terminated or truncated),
+            bool(error_text),
+            error_text,
+        )
     except Exception:
-        return 0.0, True, True
+        return 0.0, True, True, "step_exception"
 
 
 def build_vlm_prompt(obs):
@@ -1145,7 +1161,9 @@ def evaluate(
                         )
 
                     base_action = _normalize_action_text(base_out)
-                    base_reward, _, base_failed = _single_step(env, base_action)
+                    base_reward, _, base_failed, base_error = _single_step(
+                        env, base_action
+                    )
                     base_success = base_reward > 0
                     base_hits += int(base_success)
                     base_total += 1
@@ -1157,6 +1175,7 @@ def evaluate(
                             "base_output": base_out,
                             "base_action": base_action,
                             "base_success": base_success,
+                            "base_error": base_error,
                         }
                     )
 
@@ -1178,7 +1197,9 @@ def evaluate(
                         )
 
                     steer_action = _normalize_action_text(steer_out)
-                    steer_reward, _, steer_failed = _single_step(env, steer_action)
+                    steer_reward, _, steer_failed, steer_error = _single_step(
+                        env, steer_action
+                    )
                     steer_success = steer_reward > 0
                     steer_hits += int(steer_success)
                     if steer_failed:
@@ -1189,6 +1210,7 @@ def evaluate(
                             "steer_output": steer_out,
                             "steer_action": steer_action,
                             "steer_success": steer_success,
+                            "steer_error": steer_error,
                         }
                     )
 
