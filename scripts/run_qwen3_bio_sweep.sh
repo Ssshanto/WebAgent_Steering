@@ -128,7 +128,23 @@ for idx in "${!models[@]}"; do
   middle1="$(py -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(x) for x in d[sys.argv[2]]["middle1"]))' "${PLAN_JSON}" "${model}")"
   middle6="$(py -c 'import json,sys; d=json.load(open(sys.argv[1])); print(",".join(str(x) for x in d[sys.argv[2]]["middle6"]))' "${PLAN_JSON}" "${model}")"
 
-  if [[ -n "${next_model}" ]]; then
+  base_summary="${model_out}/baseline_summary.tsv"
+  base_jsonl="${model_out}/${model}_L${middle1}_a0.jsonl"
+  base_done=0
+  steer_done=0
+
+  if stage_complete "${base_summary}" "${base_jsonl}" 1; then
+    base_done=1
+  fi
+
+  steer_summary="${model_out}/steer_summary.tsv"
+  steer_jsonl="${model_out}/${model}_L$(echo "${middle6}" | cut -d',' -f1)_a3.jsonl"
+
+  if stage_complete "${steer_summary}" "${steer_jsonl}" 6; then
+    steer_done=1
+  fi
+
+  if [[ -n "${next_model}" && ( ${base_done} -eq 0 || ${steer_done} -eq 0 ) ]]; then
     next_model_id="$(py -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d[sys.argv[2]]["model_id"])' "${PLAN_JSON}" "${next_model}")"
     prefetch_log="${LOG_ROOT}/prefetch_${next_model}.log"
     if [[ ${DRY_RUN} -eq 1 ]]; then
@@ -139,10 +155,7 @@ for idx in "${!models[@]}"; do
     fi
   fi
 
-  base_summary="${model_out}/baseline_summary.tsv"
-  base_jsonl="${model_out}/${model}_L${middle1}_a0.jsonl"
-
-  if stage_complete "${base_summary}" "${base_jsonl}" 1; then
+  if [[ ${base_done} -eq 1 ]]; then
     echo "[skip] baseline complete: ${model}"
   else
     echo "[run] baseline: ${model}"
@@ -158,10 +171,7 @@ for idx in "${!models[@]}"; do
       2>&1 | tee "${model_log_dir}/baseline.log"
   fi
 
-  steer_summary="${model_out}/steer_summary.tsv"
-  steer_jsonl="${model_out}/${model}_L$(echo "${middle6}" | cut -d',' -f1)_a3.jsonl"
-
-  if stage_complete "${steer_summary}" "${steer_jsonl}" 6; then
+  if [[ ${steer_done} -eq 1 ]]; then
     echo "[skip] steer complete: ${model}"
   else
     echo "[run] steer alpha=3 layers=${middle6}: ${model}"
