@@ -87,10 +87,27 @@ with open(p,"r",encoding="utf-8") as f:
 print("ok")' "${file_path}" >/dev/null 2>&1
 }
 
+summary_rows() {
+  local summary_path="$1"
+  [[ -f "${summary_path}" ]] || { echo 0; return; }
+  local lines
+  lines=$(wc -l < "${summary_path}")
+  if [[ ${lines} -le 1 ]]; then
+    echo 0
+  else
+    echo $((lines - 1))
+  fi
+}
+
 stage_complete() {
   local summary_path="$1"
   local jsonl_path="$2"
-  [[ -f "${summary_path}" ]] && is_valid_jsonl "${jsonl_path}"
+  local expected_rows="$3"
+  [[ -f "${summary_path}" ]] || return 1
+  is_valid_jsonl "${jsonl_path}" || return 1
+  local rows
+  rows=$(summary_rows "${summary_path}")
+  [[ "${rows}" -ge "${expected_rows}" ]]
 }
 
 models=(qwen3-0.6b qwen3-1.7b qwen3-4b qwen3-8b)
@@ -125,7 +142,7 @@ for idx in "${!models[@]}"; do
   base_summary="${model_out}/baseline_summary.tsv"
   base_jsonl="${model_out}/${model}_L${middle1}_a0.jsonl"
 
-  if stage_complete "${base_summary}" "${base_jsonl}"; then
+  if stage_complete "${base_summary}" "${base_jsonl}" 1; then
     echo "[skip] baseline complete: ${model}"
   else
     echo "[run] baseline: ${model}"
@@ -144,7 +161,7 @@ for idx in "${!models[@]}"; do
   steer_summary="${model_out}/steer_summary.tsv"
   steer_jsonl="${model_out}/${model}_L$(echo "${middle6}" | cut -d',' -f1)_a3.jsonl"
 
-  if stage_complete "${steer_summary}" "${steer_jsonl}"; then
+  if stage_complete "${steer_summary}" "${steer_jsonl}" 6; then
     echo "[skip] steer complete: ${model}"
   else
     echo "[run] steer alpha=3 layers=${middle6}: ${model}"
