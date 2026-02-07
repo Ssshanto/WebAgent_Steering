@@ -31,7 +31,6 @@ from miniwob_steer import (
     evaluate,
     load_base_jsonl,
     list_miniwob_tasks,
-    normalize_miniwob_url,
     get_layer,
 )
 
@@ -64,9 +63,6 @@ def parse_alpha_list(s):
 
 def run_sweep(args):
     """Execute the sweep over layers and alphas."""
-
-    # Normalize MINIWOB_URL
-    normalize_miniwob_url()
 
     # Set seeds
     random.seed(args.seed)

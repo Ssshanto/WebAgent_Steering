@@ -9,26 +9,23 @@ task-specific fine-tuning.
 
 Supports:
 - Text-only LLMs (Qwen, Llama, Gemma, Phi, SmolLM)
-- Vision-Language Models (Qwen-VL) with Set-of-Marks annotation
+- Vision-Language Models (Qwen-VL)
 """
 
 import argparse
-import io
 import json
 import os
 import random
-import re
 
 import gymnasium as gym
 import browsergym.miniwob
-from browsergym.core.action.parsers import NamedArgument, highlevel_action_parser
+from browsergym.core.action.highlevel import HighLevelActionSet
 import numpy as np
 import torch
 from browsergym.utils.obs import flatten_dom_to_str, flatten_axtree_to_str
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
-import bs4
 
 # =============================================================================
 # MODEL CONFIGURATION
@@ -119,6 +116,29 @@ NO_CHAT_TEMPLATE = {"opt-iml-1.3b"}
 
 # Models that require VLM mode
 VLM_MODELS = {"qwen-vl-2b"}
+
+
+def _apply_template(tokenizer, messages, model_key):
+    """Apply chat template with model-specific options."""
+    # Qwen3 defaults to reasoning mode; disable it for action-only outputs.
+    if model_key and model_key.startswith("qwen3-"):
+        try:
+            return tokenizer.apply_chat_template(
+                messages,
+                tokenize=False,
+                add_generation_prompt=True,
+                enable_thinking=False,
+            )
+        except TypeError:
+            text = tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True
+            )
+            return f"{text}\n/no_think"
+
+    return tokenizer.apply_chat_template(
+        messages, tokenize=False, add_generation_prompt=True
+    )
+
 
 # =============================================================================
 # VLM HELPERS
@@ -213,106 +233,6 @@ def get_screenshot_from_obs(obs):
     return img
 
 
-def extract_element_positions_from_dom(dom_object):
-    """Extract element positions from BrowserGym DOM object for SoM overlay.
-
-    Note: BrowserGym's DOM object doesn't include bounding box info by default.
-    For VLM with Set-of-Marks, you may need to use Playwright's getBoundingClientRect
-    or rely on the AXTree which has partial position information.
-
-    This is a simplified version that extracts bid attributes without positions.
-    For production VLM use, you'd need to query the browser for actual positions.
-    """
-    dom_str = flatten_dom_to_str(dom_object)
-    soup = bs4.BeautifulSoup(dom_str, "lxml")
-
-    positions = []
-    elements_with_bid = soup.find_all(attrs={"bid": True})
-
-    for elem in elements_with_bid:
-        bid = elem.get("bid")
-        text = elem.get_text(strip=True)[:20]
-
-        # Note: Without actual bounding boxes from the browser,
-        # we can't properly annotate the screenshot.
-        # For research purposes, you may want to disable SoM or
-        # implement proper position extraction via Playwright.
-        positions.append(
-            {
-                "bid": bid,
-                "text": text,
-                # Placeholder positions - would need real implementation
-                "x": 0,
-                "y": 0,
-                "w": 50,
-                "h": 20,
-            }
-        )
-
-    return positions
-
-
-def annotate_screenshot_with_marks(img, elements):
-    """Overlay element IDs on screenshot (Set-of-Marks annotation).
-
-    Note: This requires accurate bounding box positions from the browser.
-    Current implementation is a placeholder.
-    """
-    draw = ImageDraw.Draw(img)
-
-    # Try to load font, fall back to default
-    try:
-        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 12)
-    except (IOError, OSError):
-        font = ImageFont.load_default()
-
-    for elem in elements:
-        x, y, w, h = (
-            elem.get("x", 0),
-            elem.get("y", 0),
-            elem.get("w", 50),
-            elem.get("h", 20),
-        )
-        bid = elem.get("bid", "?")
-
-        # Draw bounding box
-        draw.rectangle([x, y, x + w, y + h], outline="red", width=2)
-
-        # Draw bid label
-        label = f"[{bid}]"
-        draw.rectangle([x, y - 15, x + 25, y], fill="red")
-        draw.text((x + 2, y - 14), label, fill="white", font=font)
-
-    return img
-
-
-def extract_element_positions(dom_elements):
-    """Extract bounding boxes from DOM elements for SoM overlay."""
-    positions = []
-    for el in dom_elements:
-        ref = el.get("ref")
-        if ref is None:
-            continue
-        # MiniWob provides bounding info via JavaScript execution
-        # For now, use approximate positions from DOM structure
-        # Real implementation would use driver.execute_script to get boundingClientRect
-        left = el.get("left", 0)
-        top = el.get("top", 0)
-        width = el.get("width", 50)
-        height = el.get("height", 20)
-        positions.append(
-            {
-                "ref": ref,
-                "x": left,
-                "y": top,
-                "w": width,
-                "h": height,
-                "text": (el.get("text") or "")[:20],
-            }
-        )
-    return positions
-
-
 def load_vlm(model_id):
     """Load VLM model and processor."""
     from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
@@ -397,14 +317,18 @@ def list_miniwob_tasks():
     return sorted(tasks)
 
 
-def normalize_miniwob_url():
-    """Ensure MINIWOB_URL ends with a trailing slash if set."""
-    url = os.environ.get("MINIWOB_URL")
-    if not url:
-        return
-    url = url.strip()
-    if url and not url.endswith("/"):
-        os.environ["MINIWOB_URL"] = url + "/"
+def make_miniwob_env(task):
+    """Create MiniWob env with BrowserGym-native action mapping."""
+    action_set = HighLevelActionSet(
+        subsets=["miniwob_all"],
+        strict=False,
+        multiaction=False,
+        demo_mode="off",
+    )
+    return gym.make(
+        f"browsergym/miniwob.{task}",
+        action_mapping=action_set.to_python_code,
+    )
 
 
 # =============================================================================
@@ -420,11 +344,7 @@ SYSTEM_PROMPT = (
 )
 
 ACTION_FORMAT = (
-    "Available actions:\n"
-    '- click("<bid>")\n'
-    '- fill("<bid>", "<text>")\n'
-    '- select("<bid>", "<option>")  # alias of fill\n'
-    "- noop()"
+    'Available actions:\n- click("<bid>")\n- fill("<bid>", "<text>")\n- noop()'
 )
 
 # =============================================================================
@@ -464,8 +384,8 @@ PROMPT_CONFIGS = {
     },
     # --- TIER 2: MEDIUM-CONFIDENCE ---
     "element_selection": {
-        "pos": "Select the element that exactly matches the task. Verify the ref number is correct.",
-        "neg": "Select any element without checking. Don't verify the ref number.",
+        "pos": "Select the element that exactly matches the task. Verify the bid is correct.",
+        "neg": "Select any element without checking. Don't verify the bid.",
     },
     "attribute_matching": {
         "pos": "Match all attributes exactly. The text, id, and class must align with requirements.",
@@ -572,9 +492,7 @@ class SteeredModel:
         """Extract activation from prompt before generation for all layers."""
         if self.use_chat_template:
             messages = [{"role": "user", "content": prompt}]
-            formatted = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            formatted = _apply_template(self.tokenizer, messages, self.model_key)
         else:
             # Models without chat template (e.g., OPT)
             formatted = f"User: {prompt}\nAssistant:"
@@ -613,9 +531,7 @@ class SteeredModel:
         """Generate text, optionally with steering."""
         if self.use_chat_template:
             messages = [{"role": "user", "content": prompt}]
-            formatted_prompt = self.tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
+            formatted_prompt = _apply_template(self.tokenizer, messages, self.model_key)
         else:
             # Models without chat template (e.g., OPT)
             formatted_prompt = f"User: {prompt}\nAssistant:"
@@ -826,163 +742,41 @@ class SteeredVLM:
 # =============================================================================
 
 
-def extract_dom_elements(dom_object, max_elems=80):
-    """Extract DOM elements with bid attributes from BrowserGym DOM object.
-
-    Returns a simplified HTML string with bid attributes for element identification.
-    """
-    # Get flattened DOM string from BrowserGym
-    dom_str = flatten_dom_to_str(dom_object)
-
-    # Parse with BeautifulSoup to extract elements with bid attributes
-    soup = bs4.BeautifulSoup(dom_str, "lxml")
-
-    # Find all elements with bid attributes
-    elements_with_bid = soup.find_all(attrs={"bid": True})
-
-    # Build simplified HTML representation
-    lines = []
-    for elem in elements_with_bid[:max_elems]:
-        tag = elem.name
-        bid = elem.get("bid")
-        text = elem.get_text(strip=True)[:100]  # Limit text length
-
-        # Get relevant attributes
-        attrs = [f'bid="{bid}"']
-        if elem.get("id"):
-            attrs.append(f'id="{elem.get("id")}"')
-        if elem.get("class"):
-            classes = " ".join(elem.get("class"))
-            attrs.append(f'class="{classes}"')
-        if elem.get("value"):
-            attrs.append(f'value="{elem.get("value")}"')
-        if elem.get("type"):
-            attrs.append(f'type="{elem.get("type")}"')
-        if elem.get("placeholder"):
-            attrs.append(f'placeholder="{elem.get("placeholder")}"')
-
-        attr_str = " " + " ".join(attrs)
-        lines.append(f"<{tag}{attr_str}>{text}</{tag}>")
-
-    return "\n".join(lines)
-
-
 def build_prompt(obs, max_elems=80):
     """Build prompt from BrowserGym observation."""
-    dom_text = extract_dom_elements(obs["dom_object"], max_elems)
-    return f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\nHTML:\n{dom_text}\n\n{ACTION_FORMAT}"
+    _ = max_elems
+    dom_text = flatten_dom_to_str(obs["dom_object"])
+    axtree_text = flatten_axtree_to_str(obs["axtree_object"])
+    return (
+        f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\n"
+        f"DOM:\n{dom_text}\n\n"
+        f"AXTree:\n{axtree_text}\n\n"
+        f"{ACTION_FORMAT}"
+    )
+
+
+def _normalize_action_text(text):
+    if not text:
+        return "noop()"
+    action = text.strip()
+    return action if action else "noop()"
+
+
+def _single_step(env, action_text):
+    try:
+        _obs, reward, terminated, truncated, _info = env.step(action_text)
+        return float(reward), bool(terminated or truncated), False
+    except Exception:
+        return 0.0, True, True
 
 
 def build_vlm_prompt(obs):
     """Build prompt for VLM (image-based) mode."""
-    return f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\nThe screenshot shows the webpage with elements marked by [bid] numbers.\n\n{ACTION_FORMAT}"
-
-
-# =============================================================================
-# ACTION PARSING
-# =============================================================================
-
-
-def parse_action(text):
-    """Parse BrowserGym-style actions from model output.
-
-    Expected format: click("<bid>") / fill("<bid>", "<text>") / select("<bid>", "<option>")
-    Uses BrowserGym's highlevel_action_parser for robust parsing.
-    """
-    if not text or not text.strip():
-        return None
-
-    try:
-        parsed = highlevel_action_parser.parse_string(text, parse_all=True)
-    except Exception:
-        return None
-
-    actions = []
-    for call in parsed:
-        if not call:
-            continue
-        func = str(call[0]).lower()
-        args = call[1] if len(call) > 1 else []
-
-        positional = []
-        named = {}
-        for arg in args:
-            if isinstance(arg, NamedArgument):
-                named[arg.name] = arg.value
-            else:
-                positional.append(arg)
-
-        if func == "noop":
-            actions.append({"action": "NOOP"})
-            continue
-
-        if func == "click":
-            bid = named.get("bid") if named else None
-            if bid is None and positional:
-                bid = positional[0]
-            if bid is None:
-                continue
-            actions.append({"action": "CLICK", "bid": str(bid)})
-            continue
-
-        if func in ("fill", "select"):
-            bid = named.get("bid") if named else None
-            text = named.get("text") if named else None
-            if bid is None and positional:
-                bid = positional[0]
-            if text is None and len(positional) > 1:
-                text = positional[1]
-            if bid is None:
-                continue
-            actions.append(
-                {
-                    "action": "TYPE",
-                    "bid": str(bid),
-                    "text": "" if text is None else str(text),
-                }
-            )
-            continue
-
-    return actions if actions else None
-
-
-# =============================================================================
-# ENVIRONMENT INTERACTION
-# =============================================================================
-
-
-def step_env(env, actions):
-    """Execute action(s) in BrowserGym environment using string-based actions."""
-    if not actions:
-        # BrowserGym noop action
-        _obs, reward, terminated, truncated, _info = env.step("noop()")
-        return reward, terminated or truncated
-
-    final_reward = 0
-    final_terminated = False
-
-    for action in actions:
-        if action["action"] == "NOOP":
-            _obs, reward, terminated, truncated, _info = env.step("noop()")
-            final_reward = reward
-            final_terminated = terminated or truncated
-            if final_terminated:
-                break
-            continue
-        # Convert parsed action dict to BrowserGym string format
-        if action["action"] == "CLICK":
-            action_str = f'click("{action["bid"]}")'
-        else:  # TYPE
-            action_str = f'fill("{action["bid"]}", "{action.get("text", "")}")'
-
-        _obs, reward, terminated, truncated, _info = env.step(action_str)
-        final_reward = reward
-        final_terminated = terminated or truncated
-
-        if final_terminated:
-            break
-
-    return final_reward, final_terminated
+    return (
+        f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\n"
+        "Use the screenshot to identify the correct target element by its bid and output one valid action.\n\n"
+        f"{ACTION_FORMAT}"
+    )
 
 
 # =============================================================================
@@ -992,15 +786,14 @@ def step_env(env, actions):
 
 def _get_prompt_and_image(model, obs, env, max_elems):
     """Get prompt and optionally image based on model type."""
+    _ = env
     if hasattr(model, "is_vlm") and model.is_vlm:
         # VLM mode: use screenshot from BrowserGym observation
         screenshot = get_screenshot_from_obs(obs)
-        elements = extract_element_positions_from_dom(obs["dom_object"])
-        annotated_image = annotate_screenshot_with_marks(screenshot, elements)
         prompt = build_vlm_prompt(obs)
-        return prompt, annotated_image
+        return prompt, screenshot
     else:
-        # Text mode: use DOM HTML
+        # Text mode: use BrowserGym observation flatteners
         prompt = build_prompt(obs, max_elems)
         return prompt, None
 
@@ -1102,7 +895,7 @@ def compute_vector(
         steps_per_task = max(1, steps // len(tasks))
 
         for task in tasks:
-            env = gym.make(f"browsergym/miniwob.{task}")
+            env = make_miniwob_env(task)
             for _ in range(steps_per_task):
                 seed_val = rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed_val)
@@ -1293,7 +1086,7 @@ def evaluate(
 
     with open(out_path, "w", encoding="utf-8") as f:
         for task in tasks:
-            env = gym.make(f"browsergym/miniwob.{task}")
+            env = make_miniwob_env(task)
             for _ in range(steps_per_task):
                 seed = seed_rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed)
@@ -1337,12 +1130,12 @@ def evaluate(
                             prompt, steer=False, max_new_tokens=max_new_tokens
                         )
 
-                    base_action = parse_action(base_out)
-                    base_reward, _ = step_env(env, base_action)
+                    base_action = _normalize_action_text(base_out)
+                    base_reward, _, base_failed = _single_step(env, base_action)
                     base_success = base_reward > 0
                     base_hits += int(base_success)
                     base_total += 1
-                    if base_action is None:
+                    if base_failed:
                         parse_fails_base += 1
 
                     record.update(
@@ -1370,11 +1163,11 @@ def evaluate(
                             prompt, steer=True, max_new_tokens=max_new_tokens
                         )
 
-                    steer_action = parse_action(steer_out)
-                    steer_reward, _ = step_env(env, steer_action)
+                    steer_action = _normalize_action_text(steer_out)
+                    steer_reward, _, steer_failed = _single_step(env, steer_action)
                     steer_success = steer_reward > 0
                     steer_hits += int(steer_success)
-                    if steer_action is None:
+                    if steer_failed:
                         parse_fails_steer += 1
 
                     record.update(
@@ -1481,8 +1274,6 @@ def main():
     random.seed(args.seed)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
-
-    normalize_miniwob_url()
 
     # BrowserGym environments are registered automatically when importing browsergym.miniwob
     # No need for gym.register_envs() like with miniwob package
