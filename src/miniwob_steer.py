@@ -777,6 +777,7 @@ def _normalize_action_text(text):
     if not action:
         return "noop()"
 
+    action = action.splitlines()[0].strip()
     action = re.sub(r"(?m)^\s*-\s+", "", action)
     action = re.sub(r"click\(\s*(\d+)\s*\)", r'click("\1")', action)
     action = re.sub(r"fill\(\s*(\d+)\s*,", r'fill("\1",', action)
