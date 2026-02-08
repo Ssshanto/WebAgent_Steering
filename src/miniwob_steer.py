@@ -528,7 +528,7 @@ class SteeredModel:
                 self.vector = tensor_vec
         self._vector_cache.clear()
 
-    def generate(self, prompt, steer=False, max_new_tokens=80):
+    def generate(self, prompt, steer=False, max_new_tokens=80, deterministic=False):
         """Generate text, optionally with steering."""
         if self.use_chat_template:
             messages = [{"role": "user", "content": prompt}]
@@ -572,7 +572,7 @@ class SteeredModel:
         if self.model_key and self.model_key.startswith("qwen3-"):
             gen_kwargs.update(
                 {
-                    "do_sample": True,
+                    "do_sample": not deterministic,
                     "temperature": 0.7,
                     "top_p": 0.8,
                     "top_k": 20,
@@ -686,7 +686,9 @@ class SteeredVLM:
                 self.vector = tensor_vec
         self._vector_cache.clear()
 
-    def generate(self, prompt, steer=False, max_new_tokens=80, image=None):
+    def generate(
+        self, prompt, steer=False, max_new_tokens=80, image=None, deterministic=False
+    ):
         """Generate text from multimodal input, optionally with steering."""
         if image is not None:
             messages = [
@@ -770,6 +772,11 @@ def build_prompt(obs, max_elems=80):
     )
 
 
+ACTION_RE = re.compile(
+    r'^(click\("\d+"\)|fill\("\d+",\s*".*"\)|select\("\d+",\s*".*"\)|noop\(\))$'
+)
+
+
 def _normalize_action_text(text):
     if not text:
         return "noop()"
@@ -783,6 +790,77 @@ def _normalize_action_text(text):
     action = re.sub(r"fill\(\s*(\d+)\s*,", r'fill("\1",', action)
     action = re.sub(r"select\(\s*(\d+)\s*,", r'select("\1",', action)
     return action
+
+
+def _parse_action_kind_bid(action_text):
+    if not action_text:
+        return "invalid", None
+    s = action_text.strip()
+    if s.startswith("noop("):
+        return "noop", None
+    if s.startswith("click("):
+        m = re.search(r'click\("(\d+)"\)', s)
+        return "click", m.group(1) if m else None
+    if s.startswith("fill("):
+        m = re.search(r'fill\("(\d+)"\s*,', s)
+        return "fill", m.group(1) if m else None
+    if s.startswith("select("):
+        m = re.search(r'select\("(\d+)"\s*,', s)
+        return "select", m.group(1) if m else None
+    return "invalid", None
+
+
+def _dom_text(obs):
+    try:
+        return flatten_dom_to_str(obs["dom_object"])
+    except Exception:
+        return ""
+
+
+def _element_tag_for_bid(dom_text, bid):
+    if not dom_text or bid is None:
+        return None
+    m = re.search(rf"<([a-zA-Z0-9_-]+)[^>]*\bbid=\"{re.escape(str(bid))}\"", dom_text)
+    return m.group(1).lower() if m else None
+
+
+def _classify_action_failure(obs, action_text):
+    kind, bid = _parse_action_kind_bid(action_text)
+    dom_text = _dom_text(obs)
+    format_error = ACTION_RE.match((action_text or "").strip()) is None
+    bid_present = True
+    elem_tag = None
+    if bid is not None:
+        bid_present = f'bid="{bid}"' in dom_text
+        elem_tag = _element_tag_for_bid(dom_text, bid)
+    wrong_bid = bid is not None and not bid_present
+    wrong_action_type = kind in {"fill", "select"} and elem_tag not in {
+        "input",
+        "textarea",
+        "select",
+        "option",
+    }
+    return {
+        "action_type": kind,
+        "bid": bid,
+        "format_error": bool(format_error),
+        "wrong_bid": bool(wrong_bid),
+        "wrong_action_type": bool(wrong_action_type),
+    }
+
+
+def _is_click_intercept(error_text):
+    txt = (error_text or "").lower()
+    return any(
+        t in txt
+        for t in [
+            "intercepts pointer events",
+            "element is not visible",
+            "timeout",
+            "not interactable",
+            "obscured",
+        ]
+    )
 
 
 def _single_step(env, action_text):
@@ -859,14 +937,26 @@ def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
         # Non-standard: Extract from generated response
         if image is not None:
             pos_text = model.generate(
-                pos, steer=False, max_new_tokens=max_new_tokens, image=image
+                pos,
+                steer=False,
+                max_new_tokens=max_new_tokens,
+                image=image,
+                deterministic=True,
             )
             neg_text = model.generate(
-                neg, steer=False, max_new_tokens=max_new_tokens, image=image
+                neg,
+                steer=False,
+                max_new_tokens=max_new_tokens,
+                image=image,
+                deterministic=True,
             )
         else:
-            pos_text = model.generate(pos, steer=False, max_new_tokens=max_new_tokens)
-            neg_text = model.generate(neg, steer=False, max_new_tokens=max_new_tokens)
+            pos_text = model.generate(
+                pos, steer=False, max_new_tokens=max_new_tokens, deterministic=True
+            )
+            neg_text = model.generate(
+                neg, steer=False, max_new_tokens=max_new_tokens, deterministic=True
+            )
 
         # For VLM, _last_token_state doesn't need image
         pos_states = model._last_token_state(pos_text)
@@ -1162,6 +1252,7 @@ def evaluate(
                         )
 
                     base_action = _normalize_action_text(base_out)
+                    base_diag = _classify_action_failure(obs, base_action)
                     base_reward, _, base_failed, base_error = _single_step(
                         env, base_action
                     )
@@ -1177,6 +1268,12 @@ def evaluate(
                             "base_action": base_action,
                             "base_success": base_success,
                             "base_error": base_error,
+                            "base_action_type": base_diag["action_type"],
+                            "base_bid": base_diag["bid"],
+                            "base_format_error": base_diag["format_error"],
+                            "base_wrong_bid": base_diag["wrong_bid"],
+                            "base_wrong_action_type": base_diag["wrong_action_type"],
+                            "base_click_intercept": _is_click_intercept(base_error),
                         }
                     )
 
@@ -1198,6 +1295,7 @@ def evaluate(
                         )
 
                     steer_action = _normalize_action_text(steer_out)
+                    steer_diag = _classify_action_failure(obs, steer_action)
                     steer_reward, _, steer_failed, steer_error = _single_step(
                         env, steer_action
                     )
@@ -1212,6 +1310,12 @@ def evaluate(
                             "steer_action": steer_action,
                             "steer_success": steer_success,
                             "steer_error": steer_error,
+                            "steer_action_type": steer_diag["action_type"],
+                            "steer_bid": steer_diag["bid"],
+                            "steer_format_error": steer_diag["format_error"],
+                            "steer_wrong_bid": steer_diag["wrong_bid"],
+                            "steer_wrong_action_type": steer_diag["wrong_action_type"],
+                            "steer_click_intercept": _is_click_intercept(steer_error),
                         }
                     )
 
