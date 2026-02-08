@@ -164,6 +164,7 @@ for idx in "${!models[@]}"; do
       --model "${model}" \
       --layers "${middle1}" \
       --alphas "0" \
+      --seed "0" \
       --max-new-tokens "192" \
       --base-only \
       --out-dir "${model_out}" \
@@ -181,7 +182,10 @@ for idx in "${!models[@]}"; do
       --model "${model}" \
       --layers "${middle6}" \
       --alphas "3.0" \
+      --seed "0" \
       --max-new-tokens "192" \
+      --steer-only \
+      --base-jsonl "${base_jsonl}" \
       --out-dir "${model_out}" \
       --cache-dir "${VEC_ROOT}" \
       --summary-path "${steer_summary}" \
