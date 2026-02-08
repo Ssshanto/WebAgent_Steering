@@ -118,6 +118,7 @@ def run_sweep(args):
     print(f"VLM mode: {is_vlm}")
     print(f"Prompt type: {args.prompt_type}")
     print(f"Vector method: {args.vector_method}")
+    print(f"Action window: {args.action_window}")
 
     # Start with first layer to initialize model
     first_layer = layers[0]
@@ -128,6 +129,7 @@ def run_sweep(args):
             layer_idx=first_layer,
             coeff=alphas[0],  # Will update per run
             vector_method=args.vector_method,
+            steer_action_window=args.action_window,
         )
     else:
         model = SteeredModel(
@@ -136,6 +138,7 @@ def run_sweep(args):
             coeff=alphas[0],  # Will update per run
             vector_method=args.vector_method,
             model_key=args.model,
+            steer_action_window=args.action_window,
         )
 
     print("✓ Model loaded")
@@ -407,6 +410,11 @@ def main():
         type=int,
         default=80,
         help="Max tokens for generation",
+    )
+    parser.add_argument(
+        "--action-window",
+        action="store_true",
+        help="Apply steering after prefill (generation window only)",
     )
     parser.add_argument(
         "--max-elems",

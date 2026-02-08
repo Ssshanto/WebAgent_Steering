@@ -430,6 +430,10 @@ PROMPT_CONFIGS = {
         "pos": "Confident. One line. Achieve the goal.",
         "neg": "Uncertain. Explain at length. Don't care about goal.",
     },
+    "failure_conditioned": {
+        "pos": "Output exactly one valid BrowserGym action. Use an existing bid from the current DOM. Match action type to element capability. Avoid non-interactable targets and malformed action syntax.",
+        "neg": "Output an invalid or careless action. Use a missing or wrong bid, mismatched action type for the element, and malformed or non-interactable action syntax.",
+    },
 }
 
 # =============================================================================
@@ -448,6 +452,7 @@ class SteeredModel:
         steer_all_layers=False,
         vector_method="response",
         model_key=None,
+        steer_action_window=False,
     ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model_key = model_key  # Store for architecture-specific handling
@@ -480,6 +485,7 @@ class SteeredModel:
         self.vectors = {}  # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
         self.is_vlm = False
+        self.steer_action_window = steer_action_window
 
     def _last_token_state(self, text):
         """Extract activation from last token of text for all layers."""
@@ -539,9 +545,13 @@ class SteeredModel:
 
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to(self.device)
         input_length = inputs.input_ids.shape[1]
+        hook_calls = {"count": 0}
 
         def hook(_module, _input, output):
             if not steer or self.vector is None:
+                return output
+            hook_calls["count"] += 1
+            if self.steer_action_window and hook_calls["count"] == 1:
                 return output
             if torch.is_tensor(output):
                 target = output
@@ -594,7 +604,14 @@ class SteeredModel:
 class SteeredVLM:
     """Vision-Language Model with activation steering on LLM backbone."""
 
-    def __init__(self, model_name, layer_idx, coeff, vector_method="response"):
+    def __init__(
+        self,
+        model_name,
+        layer_idx,
+        coeff,
+        vector_method="response",
+        steer_action_window=False,
+    ):
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
         self.model, self.processor = load_vlm(model_name)
 
@@ -614,6 +631,7 @@ class SteeredVLM:
         self.vectors = {}  # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
         self.is_vlm = True
+        self.steer_action_window = steer_action_window
 
     def _get_llm_layers(self):
         """Get LLM backbone layers for steering (skip ViT encoder)."""
@@ -714,9 +732,13 @@ class SteeredVLM:
 
         inputs = {k: v.to(self.device) for k, v in inputs.items()}
         input_length = inputs["input_ids"].shape[1]
+        hook_calls = {"count": 0}
 
         def hook(_module, _input, output):
             if not steer or self.vector is None:
+                return output
+            hook_calls["count"] += 1
+            if self.steer_action_window and hook_calls["count"] == 1:
                 return output
             if torch.is_tensor(output):
                 target = output
@@ -1423,6 +1445,11 @@ def main():
         "--cache-dir", default="vectors", help="Directory to cache steering vectors"
     )
     parser.add_argument(
+        "--action-window",
+        action="store_true",
+        help="Apply steering after prefill (generation window only)",
+    )
+    parser.add_argument(
         "--force-recompute",
         action="store_true",
         help="Force recomputation of steering vector",
@@ -1471,6 +1498,7 @@ def main():
             layer_idx=layer_idx,
             coeff=args.coeff,
             vector_method=args.vector_method,
+            steer_action_window=args.action_window,
         )
     else:
         model = SteeredModel(
@@ -1479,6 +1507,7 @@ def main():
             coeff=args.coeff,
             vector_method=args.vector_method,
             model_key=args.model,
+            steer_action_window=args.action_window,
         )
 
     # Compute or load steering vector
