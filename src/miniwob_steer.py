@@ -1221,22 +1221,46 @@ def evaluate(
                 if steer_only:
                     assert base_records is not None
                     base_record = base_records.get((task, seed))
-                    if base_record is not None:
-                        assert base_record is not None
-                        base_action = base_record.get("base_action")
-                        base_success = base_record.get("base_success")
-                        record.update(
-                            {
-                                "base_output": base_record.get("base_output"),
-                                "base_action": base_action,
-                                "base_success": base_success,
-                            }
+                    if base_record is None:
+                        raise ValueError(
+                            f"Missing baseline record for task={task}, seed={seed} in steer-only mode"
                         )
-                        if base_success is not None:
-                            base_hits += int(base_success)
-                            base_total += 1
-                        if base_action is None:
-                            parse_fails_base += 1
+
+                    base_action = base_record.get("base_action")
+                    base_success = base_record.get("base_success")
+                    base_error = str(base_record.get("base_error", "") or "")
+                    base_failed = bool(base_error)
+
+                    record.update(
+                        {
+                            "base_output": base_record.get("base_output"),
+                            "base_action": base_action,
+                            "base_success": base_success,
+                            "base_error": base_error,
+                            "base_action_type": base_record.get("base_action_type"),
+                            "base_bid": base_record.get("base_bid"),
+                            "base_format_error": bool(
+                                base_record.get("base_format_error", False)
+                            ),
+                            "base_wrong_bid": bool(
+                                base_record.get("base_wrong_bid", False)
+                            ),
+                            "base_wrong_action_type": bool(
+                                base_record.get("base_wrong_action_type", False)
+                            ),
+                            "base_click_intercept": bool(
+                                base_record.get(
+                                    "base_click_intercept",
+                                    _is_click_intercept(base_error),
+                                )
+                            ),
+                        }
+                    )
+                    if base_success is not None:
+                        base_hits += int(base_success)
+                        base_total += 1
+                    if base_failed:
+                        parse_fails_base += 1
                 else:
                     # Baseline
                     if image is not None:
