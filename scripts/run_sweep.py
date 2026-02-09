@@ -24,9 +24,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from miniwob_steer import (
     MODEL_MAP,
-    VLM_MODELS,
     SteeredModel,
-    SteeredVLM,
     compute_vector,
     evaluate,
     load_base_jsonl,
@@ -112,10 +110,7 @@ def run_sweep(args):
     print("LOADING MODEL")
     print("=" * 60)
 
-    is_vlm = args.model in VLM_MODELS
-
     print(f"Model: {args.model} ({MODEL_MAP[args.model]})")
-    print(f"VLM mode: {is_vlm}")
     print(f"Prompt type: {args.prompt_type}")
     print(f"Vector method: {args.vector_method}")
     print(f"Action window: {args.action_window}")
@@ -123,23 +118,14 @@ def run_sweep(args):
     # Start with first layer to initialize model
     first_layer = layers[0]
 
-    if is_vlm:
-        model = SteeredVLM(
-            MODEL_MAP[args.model],
-            layer_idx=first_layer,
-            coeff=alphas[0],  # Will update per run
-            vector_method=args.vector_method,
-            steer_action_window=args.action_window,
-        )
-    else:
-        model = SteeredModel(
-            MODEL_MAP[args.model],
-            layer_idx=first_layer,
-            coeff=alphas[0],  # Will update per run
-            vector_method=args.vector_method,
-            model_key=args.model,
-            steer_action_window=args.action_window,
-        )
+    model = SteeredModel(
+        MODEL_MAP[args.model],
+        layer_idx=first_layer,
+        coeff=alphas[0],  # Will update per run
+        vector_method=args.vector_method,
+        model_key=args.model,
+        steer_action_window=args.action_window,
+    )
 
     print("✓ Model loaded")
 

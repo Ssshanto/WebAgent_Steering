@@ -9,7 +9,6 @@ task-specific fine-tuning.
 
 Supports:
 - Text-only LLMs (Qwen, Llama, Gemma, Phi, SmolLM)
-- Vision-Language Models (Qwen-VL)
 """
 
 import argparse
@@ -23,8 +22,7 @@ import browsergym.miniwob
 from browsergym.core.action.highlevel import HighLevelActionSet
 import numpy as np
 import torch
-from browsergym.utils.obs import flatten_dom_to_str, flatten_axtree_to_str
-from PIL import Image
+from browsergym.utils.obs import flatten_dom_to_str, flatten_axtree_to_str, prune_html
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -57,8 +55,6 @@ MODEL_MAP = {
     "tinyllama-1.1b": "TinyLlama/TinyLlama-1.1B-Chat-v1.0",
     "stablelm-1.6b": "stabilityai/stablelm-2-1_6b-chat",
     "opt-iml-1.3b": "facebook/opt-iml-1.3b",
-    # VLM - Use Qwen2-VL-2B (stable, proven)
-    "qwen-vl-2b": "Qwen/Qwen2-VL-2B-Instruct",
 }
 
 # Layer depths for 50% intervention point (mid-layer steering)
@@ -78,7 +74,6 @@ LAYER_MAP = {
     "tinyllama-1.1b": 11,  # 22 layers → L11 (50%)
     "stablelm-1.6b": 12,  # 24 layers → L12 (50%)
     "opt-iml-1.3b": 12,  # 24 layers → L12 (50%)
-    "qwen-vl-2b": 14,  # 28 LLM layers → L14 (50% of LLM backbone)
 }
 
 # Model architecture types for layer access patterns
@@ -108,15 +103,10 @@ MODEL_ARCH = {
     "stablelm-1.6b": "qwen",
     # OPT uses: model.model.decoder.layers
     "opt-iml-1.3b": "opt",
-    # VLM
-    "qwen-vl-2b": "qwen-vl",
 }
 
 # Models that don't support chat templates (need raw prompting)
 NO_CHAT_TEMPLATE = {"opt-iml-1.3b"}
-
-# Models that require VLM mode
-VLM_MODELS = {"qwen-vl-2b"}
 
 
 def _apply_template(tokenizer, messages, model_key):
@@ -139,11 +129,6 @@ def _apply_template(tokenizer, messages, model_key):
     return tokenizer.apply_chat_template(
         messages, tokenize=False, add_generation_prompt=True
     )
-
-
-# =============================================================================
-# VLM HELPERS
-# =============================================================================
 
 
 def get_layer(model_key, layer_arg):
@@ -220,54 +205,6 @@ def get_additional_stop_tokens(tokenizer, model_key):
     return stop_tokens
 
 
-def get_screenshot_from_obs(obs):
-    """Get screenshot from BrowserGym observation.
-
-    BrowserGym provides screenshots directly in obs["screenshot"] as numpy array.
-    """
-    screenshot_array = obs.get("screenshot")
-    if screenshot_array is None:
-        return None
-
-    # Convert numpy array to PIL Image
-    img = Image.fromarray(screenshot_array)
-    return img
-
-
-def load_vlm(model_id):
-    """Load VLM model and processor."""
-    from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
-
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    dtype = torch.bfloat16 if device == "cuda" else torch.float32
-
-    print(f"Loading VLM: {model_id}")
-    print(f"  Device: {device}, dtype: {dtype}")
-
-    try:
-        model = Qwen2VLForConditionalGeneration.from_pretrained(
-            model_id,
-            torch_dtype=dtype,
-            device_map="auto" if device == "cuda" else None,
-            trust_remote_code=True,  # Required for Qwen models
-        )
-        processor = AutoProcessor.from_pretrained(
-            model_id,
-            trust_remote_code=True,
-        )
-
-        print(f"✓ VLM loaded successfully")
-        return model, processor
-
-    except Exception as e:
-        print(f"✗ Failed to load VLM: {e}")
-        print(f"\nTroubleshooting:")
-        print(f"  1. Check model exists: https://huggingface.co/{model_id}")
-        print(f"  2. Update transformers: pip install --upgrade transformers")
-        print(f"  3. Try different model: Qwen/Qwen2-VL-7B-Instruct")
-        raise
-
-
 # =============================================================================
 # TASK CONFIGURATION
 # =============================================================================
@@ -337,15 +274,17 @@ def make_miniwob_env(task):
 # =============================================================================
 
 SYSTEM_PROMPT = (
-    "You are a web automation agent. Execute the task by outputting action commands.\n"
-    "Rules:\n"
-    "- Output only action commands, one per line\n"
-    "- No explanations, no reasoning, no markdown\n"
-    "- Format: one action per line as described below"
+    "# Instructions\n\n"
+    "Review the current state of the page and all other information to find the best\n"
+    "possible next action to accomplish your goal. Your answer will be interpreted\n"
+    "and executed by a program, make sure to follow the formatting instructions."
 )
 
-ACTION_FORMAT = (
-    'Available actions:\n- click("<bid>")\n- fill("<bid>", "<text>")\n- noop()'
+DEMO_PROMPT_ACTION_SET = HighLevelActionSet(
+    subsets=["chat", "tab", "nav", "bid", "infeas"],
+    strict=False,
+    multiaction=False,
+    demo_mode="off",
 )
 
 # =============================================================================
@@ -484,7 +423,6 @@ class SteeredModel:
         self.vector = None  # Active steering vector for current layer
         self.vectors = {}  # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
-        self.is_vlm = False
         self.steer_action_window = steer_action_window
 
     def _last_token_state(self, text):
@@ -601,196 +539,56 @@ class SteeredModel:
         return self.tokenizer.decode(generated_tokens, skip_special_tokens=True).strip()
 
 
-class SteeredVLM:
-    """Vision-Language Model with activation steering on LLM backbone."""
-
-    def __init__(
-        self,
-        model_name,
-        layer_idx,
-        coeff,
-        vector_method="response",
-        steer_action_window=False,
-    ):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model, self.processor = load_vlm(model_name)
-
-        # Detect stop tokens (Llama models need <|eot_id|> in addition to <|end_of_text|>)
-        self.stop_token_ids = [self.processor.tokenizer.eos_token_id]
-        try:
-            eot_id = self.processor.tokenizer.convert_tokens_to_ids("<|eot_id|>")
-            if eot_id is not None and eot_id != self.processor.tokenizer.unk_token_id:
-                self.stop_token_ids.append(eot_id)
-        except Exception:
-            pass
-
-        self.layer_idx = layer_idx
-        self.coeff = coeff
-        self.vector_method = vector_method
-        self.vector = None  # Active steering vector for current layer
-        self.vectors = {}  # Dictionary mapping layer_idx -> vector tensor
-        self._vector_cache = {}
-        self.is_vlm = True
-        self.steer_action_window = steer_action_window
-
-    def _get_llm_layers(self):
-        """Get LLM backbone layers for steering (skip ViT encoder)."""
-        # Qwen2-VL architecture: model.model.language_model.layers contains LLM layers
-        return self.model.model.language_model.layers
-
-    def _last_token_state(self, text):
-        """Extract activation from last token of text for all layers."""
-        inputs = self.processor(text=[text], return_tensors="pt")
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        with torch.no_grad():
-            out = self.model(**inputs, output_hidden_states=True)
-        # Return all hidden states (tuple of tensors, one per layer)
-        return out.hidden_states
-
-    def _prompt_activation(self, prompt, image=None):
-        """Extract activation from multimodal prompt before generation for all layers."""
-        if image is not None:
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ]
-        else:
-            messages = [{"role": "user", "content": prompt}]
-
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        if image is not None:
-            inputs = self.processor(text=[text], images=[image], return_tensors="pt")
-        else:
-            inputs = self.processor(text=[text], return_tensors="pt")
-
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-
-        with torch.no_grad():
-            out = self.model(**inputs, output_hidden_states=True)
-
-        # Return all hidden states (tuple of tensors, one per layer)
-        return out.hidden_states
-
-    def set_vector(self, vec, layer_idx=None):
-        """Set the steering vector(s).
-
-        Args:
-            vec: Either a single vector (tensor/array) or a dict mapping layer_idx -> vector
-            layer_idx: If vec is a single vector, which layer it's for (defaults to self.layer_idx)
-        """
-        if isinstance(vec, dict):
-            # Setting multiple vectors at once
-            self.vectors = {
-                k: torch.tensor(v, dtype=torch.float32, device="cpu")
-                for k, v in vec.items()
-            }
-            # Set active vector to the target layer if available
-            if self.layer_idx in self.vectors:
-                self.vector = self.vectors[self.layer_idx]
-        else:
-            # Setting a single vector
-            target_layer = layer_idx if layer_idx is not None else self.layer_idx
-            tensor_vec = torch.tensor(vec, dtype=torch.float32, device="cpu")
-            self.vectors[target_layer] = tensor_vec
-            if target_layer == self.layer_idx:
-                self.vector = tensor_vec
-        self._vector_cache.clear()
-
-    def generate(
-        self, prompt, steer=False, max_new_tokens=80, image=None, deterministic=False
-    ):
-        """Generate text from multimodal input, optionally with steering."""
-        if image is not None:
-            messages = [
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image", "image": image},
-                        {"type": "text", "text": prompt},
-                    ],
-                }
-            ]
-        else:
-            messages = [{"role": "user", "content": prompt}]
-
-        text = self.processor.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True
-        )
-
-        if image is not None:
-            inputs = self.processor(text=[text], images=[image], return_tensors="pt")
-        else:
-            inputs = self.processor(text=[text], return_tensors="pt")
-
-        inputs = {k: v.to(self.device) for k, v in inputs.items()}
-        input_length = inputs["input_ids"].shape[1]
-        hook_calls = {"count": 0}
-
-        def hook(_module, _input, output):
-            if not steer or self.vector is None:
-                return output
-            hook_calls["count"] += 1
-            if self.steer_action_window and hook_calls["count"] == 1:
-                return output
-            if torch.is_tensor(output):
-                target = output
-            elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
-                target = output[0]
-            else:
-                return output
-
-            vec = self._vector_cache.get(target.device)
-            if vec is None:
-                vec = self.vector.to(device=target.device, dtype=target.dtype)
-                self._vector_cache[target.device] = vec
-
-            if target.dim() == 3:
-                target[:, -1, :] += self.coeff * vec
-            elif target.dim() == 2:
-                target[-1, :] += self.coeff * vec
-            return output
-
-        # Hook into LLM backbone layers only (not ViT)
-        llm_layers = self._get_llm_layers()
-        handle = llm_layers[self.layer_idx].register_forward_hook(hook)
-
-        out = self.model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-            eos_token_id=self.stop_token_ids,
-            pad_token_id=self.processor.tokenizer.pad_token_id
-            or self.processor.tokenizer.eos_token_id,
-        )
-        handle.remove()
-
-        generated_tokens = out[0][input_length:]
-        return self.processor.decode(generated_tokens, skip_special_tokens=True).strip()
-
-
 # =============================================================================
 # DOM PROCESSING
 # =============================================================================
 
 
 def build_prompt(obs, max_elems=80):
-    """Build prompt from BrowserGym observation."""
+    """Build BrowserGym demo_agent-style prompt from observation."""
     _ = max_elems
-    dom_text = flatten_dom_to_str(obs["dom_object"])
+    dom_text = prune_html(flatten_dom_to_str(obs["dom_object"]))
     axtree_text = flatten_axtree_to_str(obs["axtree_object"])
+
+    goal = obs.get("goal", "")
+    goal_obj = obs.get("goal_object")
+    if isinstance(goal_obj, list):
+        goal_parts = []
+        for x in goal_obj:
+            if isinstance(x, dict) and x.get("type") == "text":
+                goal_parts.append(str(x.get("text", "")))
+        if goal_parts:
+            goal = "\n".join(goal_parts).strip()
+
+    open_tabs = []
+    urls = obs.get("open_pages_urls", [])
+    titles = obs.get("open_pages_titles", [])
+    active_idx = obs.get("active_page_index", 0)
+    for i, (url, title) in enumerate(zip(urls, titles)):
+        active = " (active tab)" if i == active_idx else ""
+        open_tabs.append(f"Tab {i}{active}\n  Title: {title}\n  URL: {url}")
+    tabs_text = (
+        "\n".join(open_tabs)
+        if open_tabs
+        else "Tab 0 (active tab)\n  Title: unknown\n  URL: unknown"
+    )
+
+    action_space = DEMO_PROMPT_ACTION_SET.describe(
+        with_long_description=False,
+        with_examples=True,
+    )
+
     return (
-        f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\n"
-        f"DOM:\n{dom_text}\n\n"
-        f"AXTree:\n{axtree_text}\n\n"
-        f"{ACTION_FORMAT}"
+        f"{SYSTEM_PROMPT}\n\n"
+        f"# Goal\n{goal}\n\n"
+        f"# Currently open tabs\n{tabs_text}\n\n"
+        f"# Current page Accessibility Tree\n{axtree_text}\n\n"
+        f"# Current page DOM\n{dom_text}\n\n"
+        f"# Action Space\n\n{action_space}\n\n"
+        f"# Error message from last action\n\n{obs.get('last_action_error', '')}\n\n"
+        "# Next action\n"
+        "You will now think step by step and produce your next best action. Reflect on your past actions, "
+        "any resulting error message, and the current state of the page before deciding on your next action."
     )
 
 
@@ -901,40 +699,21 @@ def _single_step(env, action_text):
         return 0.0, True, True, "step_exception"
 
 
-def build_vlm_prompt(obs):
-    """Build prompt for VLM (image-based) mode."""
-    return (
-        f"{SYSTEM_PROMPT}\n\nTask: {obs['goal']}\n\n"
-        "Use the screenshot to identify the correct target element by its bid and output one valid action.\n\n"
-        f"{ACTION_FORMAT}"
-    )
-
-
 # =============================================================================
 # STEERING VECTOR COMPUTATION
 # =============================================================================
 
 
 def _get_prompt_and_image(model, obs, env, max_elems):
-    """Get prompt and optionally image based on model type."""
+    """Get prompt and image placeholder for compatibility."""
     _ = env
-    if hasattr(model, "is_vlm") and model.is_vlm:
-        # VLM mode: use screenshot from BrowserGym observation
-        screenshot = get_screenshot_from_obs(obs)
-        prompt = build_vlm_prompt(obs)
-        return prompt, screenshot
-    else:
-        # Text mode: use BrowserGym observation flatteners
-        prompt = build_prompt(obs, max_elems)
-        return prompt, None
+    prompt = build_prompt(obs, max_elems)
+    return prompt, None
 
 
 def _get_hidden_state_offset(model, states):
     """Return offset so hidden_states[offset] maps to block 0."""
-    if model.is_vlm:
-        num_layers = len(model._get_llm_layers())
-    else:
-        num_layers = len(get_model_layers(model.model, model.model_key))
+    num_layers = len(get_model_layers(model.model, model.model_key))
     num_states = len(states)
     if num_states < num_layers:
         raise ValueError("hidden_states shorter than model layers")
@@ -949,38 +728,16 @@ def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
     """
     if model.vector_method == "prompt":
         # Standard CAA: Extract from prompt
-        if image is not None:
-            pos_states = model._prompt_activation(pos, image=image)
-            neg_states = model._prompt_activation(neg, image=image)
-        else:
-            pos_states = model._prompt_activation(pos)
-            neg_states = model._prompt_activation(neg)
+        pos_states = model._prompt_activation(pos)
+        neg_states = model._prompt_activation(neg)
     else:
         # Non-standard: Extract from generated response
-        if image is not None:
-            pos_text = model.generate(
-                pos,
-                steer=False,
-                max_new_tokens=max_new_tokens,
-                image=image,
-                deterministic=True,
-            )
-            neg_text = model.generate(
-                neg,
-                steer=False,
-                max_new_tokens=max_new_tokens,
-                image=image,
-                deterministic=True,
-            )
-        else:
-            pos_text = model.generate(
-                pos, steer=False, max_new_tokens=max_new_tokens, deterministic=True
-            )
-            neg_text = model.generate(
-                neg, steer=False, max_new_tokens=max_new_tokens, deterministic=True
-            )
-
-        # For VLM, _last_token_state doesn't need image
+        pos_text = model.generate(
+            pos, steer=False, max_new_tokens=max_new_tokens, deterministic=True
+        )
+        neg_text = model.generate(
+            neg, steer=False, max_new_tokens=max_new_tokens, deterministic=True
+        )
         pos_states = model._last_token_state(pos_text)
         neg_states = model._last_token_state(neg_text)
 
@@ -1014,7 +771,7 @@ def compute_vector(
     Computes and caches vectors for all layers simultaneously, then loads the target layer.
 
     Args:
-        model: SteeredModel or SteeredVLM instance
+        model: SteeredModel instance
         tasks: List of task names
         steps: Number of training steps
         max_elems: Max DOM elements
@@ -1439,9 +1196,6 @@ def main():
         help="Path to baseline JSONL for steer-only mode",
     )
     parser.add_argument(
-        "--vlm", action="store_true", help="Enable VLM mode (screenshot + SoM)"
-    )
-    parser.add_argument(
         "--cache-dir", default="vectors", help="Directory to cache steering vectors"
     )
     parser.add_argument(
@@ -1458,9 +1212,6 @@ def main():
 
     # Resolve layer
     layer_idx = get_layer(args.model, args.layer)
-
-    # Check VLM mode
-    is_vlm = args.vlm or args.model in VLM_MODELS
 
     # Set seeds
     random.seed(args.seed)
@@ -1490,25 +1241,14 @@ def main():
     print(f"Layer: {layer_idx} ({'auto' if args.layer == 'auto' else 'manual'})")
     print(f"Coeff: {args.coeff}")
     print(f"Prompt type: {args.prompt_type}, Vector method: {args.vector_method}")
-    print(f"VLM mode: {is_vlm}")
-
-    if is_vlm:
-        model = SteeredVLM(
-            MODEL_MAP[args.model],
-            layer_idx=layer_idx,
-            coeff=args.coeff,
-            vector_method=args.vector_method,
-            steer_action_window=args.action_window,
-        )
-    else:
-        model = SteeredModel(
-            MODEL_MAP[args.model],
-            layer_idx=layer_idx,
-            coeff=args.coeff,
-            vector_method=args.vector_method,
-            model_key=args.model,
-            steer_action_window=args.action_window,
-        )
+    model = SteeredModel(
+        MODEL_MAP[args.model],
+        layer_idx=layer_idx,
+        coeff=args.coeff,
+        vector_method=args.vector_method,
+        model_key=args.model,
+        steer_action_window=args.action_window,
+    )
 
     # Compute or load steering vector
     if not args.base_only:
