@@ -238,7 +238,8 @@ def build_demo_prompt(
         "# Instructions\n\n"
         "Review the current state of the page and all other information to find the best\n"
         "possible next action to accomplish your goal. Your answer will be interpreted\n"
-        "and executed by a program, make sure to follow the formatting instructions.",
+        "and executed by a program, make sure to follow the formatting instructions.\n\n"
+        "Return exactly ONE action for the next step. Do not output multiple actions.",
         f"\n\n# Goal\n{goal}",
         f"\n\n# Currently open tabs\n{tabs_text}",
         f"\n\n# Current page Accessibility Tree\n\n{axtree_text}\n",
@@ -246,9 +247,7 @@ def build_demo_prompt(
         f"\n\n# Action Space\n\n{action_space}\n\n"
         "Here are examples of actions with chain-of-thought reasoning:\n\n"
         "I now need to click on the Submit button to send the form. I will use the click action on the button, which has bid 12.\n"
-        '```click("12")```\n\n'
-        "I found the information requested by the user, I will send it to the chat.\n"
-        '```send_msg_to_user("The price for a 15\\" laptop is 1499 USD.")```\n',
+        '```click("12")```\n\n',
     ]
 
     if action_history:
@@ -317,7 +316,7 @@ def run_episode(
         except Exception as exc:
             reward_f = 0.0
             done = True
-            err = f"step_exception:{type(exc).__name__}"
+            err = f"step_exception:{type(exc).__name__}:{exc}"
 
         rewards.append(reward_f)
         total_reward += reward_f
@@ -573,6 +572,20 @@ def main():
             "out0": summarize_output(out0),
         }
 
+    def err_class(err: str) -> str:
+        e = (err or "").lower()
+        if "multi-action" in e:
+            return "multi_action"
+        if "invalid action type" in e:
+            return "invalid_action"
+        if "received an empty action" in e:
+            return "empty_action"
+        if "step_exception" in e:
+            return "step_exception"
+        if e.strip():
+            return "action_error"
+        return "ok"
+
     print("\n== BASELINE (first output per task) ==")
     for task in TOY_10_TASKS:
         s = short_episode(base[task])
@@ -585,15 +598,44 @@ def main():
         print(
             f"\n== STEER {name} alpha={cfg['alpha']} layers={cfg['apply_layers']} src={cfg['vector_source']} =="
         )
+
+        counts = {
+            "succ": 0,
+            "ok": 0,
+            "multi_action": 0,
+            "invalid_action": 0,
+            "empty_action": 0,
+            "action_error": 0,
+            "step_exception": 0,
+        }
         for task in TOY_10_TASKS:
             s = short_episode(payload["episodes"][task])
             b = short_episode(base[task])
             flip = (
                 "" if s["succ"] == b["succ"] else ("flip:+" if s["succ"] else "flip:-")
             )
+            counts["succ"] += int(s["succ"])
+            counts[
+                err_class(str(payload["episodes"][task].get("last_error", "") or ""))
+            ] += 1
             print(
                 f"{task}\t{flip}\tsucc={int(s['succ'])}\tsteps={s['steps']}\trew={s['rew']:.2f}\terr={summarize_output(s['err'], 60)}\t{s['out0']}"
             )
+
+        print(
+            "counts="
+            + ",".join(
+                [
+                    f"succ={counts['succ']}",
+                    f"ok={counts['ok']}",
+                    f"multi_action={counts['multi_action']}",
+                    f"invalid_action={counts['invalid_action']}",
+                    f"empty_action={counts['empty_action']}",
+                    f"action_error={counts['action_error']}",
+                    f"step_exception={counts['step_exception']}",
+                ]
+            )
+        )
 
     print(f"\nWrote: {out_path}")
 
