@@ -15,6 +15,7 @@ Constraints:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import random
@@ -45,6 +46,21 @@ TOY_10_TASKS = [
     "enter-time",
     "click-collapsible-2-nodelay",
 ]
+
+
+def list_registry_miniwob_tasks() -> list[str]:
+    env_ids = [
+        env_id
+        for env_id in gym.envs.registry.keys()
+        if env_id.startswith("browsergym/miniwob.")
+    ]
+    tasks = [env_id.split("browsergym/miniwob.", 1)[1] for env_id in env_ids]
+    return sorted(set(tasks))
+
+
+def stable_task_seed(global_seed: int, task: str) -> int:
+    h = hashlib.md5(f"{int(global_seed)}:{task}".encode("utf-8")).hexdigest()[:8]
+    return int(h, 16)
 
 
 DEFAULT_POS = "Be accurate and precise. Ensure your next action is exactly correct."
@@ -415,6 +431,23 @@ def main():
     ap.add_argument("--out", default="results/toy_browsergym_steer_probe.json")
     ap.add_argument("--pos", default=DEFAULT_POS)
     ap.add_argument("--neg", default=DEFAULT_NEG)
+    ap.add_argument(
+        "--tasks",
+        default="toy10",
+        help="'toy10', 'all', or comma-separated task names",
+    )
+    ap.add_argument(
+        "--pick-failing",
+        type=int,
+        default=0,
+        help="If >0, select this many failing tasks from registry using baseline rollout",
+    )
+    ap.add_argument(
+        "--pick-max-trials",
+        type=int,
+        default=80,
+        help="Max tasks to probe when selecting failing subset",
+    )
     args = ap.parse_args()
 
     out_path = Path(args.out)
@@ -428,9 +461,6 @@ def main():
             "MINIWOB_URL must be set (e.g. http://localhost:8080/miniwob/)"
         )
 
-    rng = random.Random(int(args.seed))
-    task_seeds = {t: rng.randint(0, 2**31 - 1) for t in TOY_10_TASKS}
-
     # Prefer bid-based actions for MiniWob tasks (demo_agent-style, avoids coord noise).
     action_set = HighLevelActionSet(
         subsets=["bid", "infeas"],
@@ -441,12 +471,62 @@ def main():
 
     lm = SteerableLM(args.model_id, device=args.device)
 
+    if args.tasks == "toy10":
+        tasks = list(TOY_10_TASKS)
+    elif args.tasks == "all":
+        tasks = list_registry_miniwob_tasks()
+    else:
+        tasks = [t.strip() for t in str(args.tasks).split(",") if t.strip()]
+
+    # Deterministic, per-task seeds.
+    task_seeds = {t: stable_task_seed(int(args.seed), t) for t in tasks}
+
+    if int(args.pick_failing) > 0:
+        want = int(args.pick_failing)
+        max_trials = int(args.pick_max_trials)
+        if max_trials < want:
+            raise ValueError("--pick-max-trials must be >= --pick-failing")
+
+        pool = list_registry_miniwob_tasks()
+        rng = random.Random(int(args.seed))
+        rng.shuffle(pool)
+
+        failing = []
+        tried = 0
+        for task in pool:
+            if tried >= max_trials:
+                break
+            tried += 1
+            ep = run_episode(
+                lm,
+                task,
+                stable_task_seed(int(args.seed), task),
+                action_set,
+                episode_steps=int(args.episode_steps),
+                max_elems=int(args.max_elems),
+                max_new_tokens=int(args.max_new_tokens),
+                steer=False,
+                cfg=None,
+            )
+            if not bool(ep.get("success")):
+                failing.append(task)
+                if len(failing) >= want:
+                    break
+
+        if len(failing) < want:
+            raise RuntimeError(
+                f"Could not find {want} failing tasks within {tried} trials; found {len(failing)}"
+            )
+
+        tasks = failing
+        task_seeds = {t: stable_task_seed(int(args.seed), t) for t in tasks}
+
     # Compute a layerwise steering vector across the 10 tasks (one obs per task).
     t0 = time.time()
     vecs = compute_layerwise_vector(
         lm,
         action_set,
-        TOY_10_TASKS,
+        tasks,
         task_seeds,
         max_elems=int(args.max_elems),
         pos_suffix=str(args.pos),
@@ -505,7 +585,7 @@ def main():
             "seed": int(args.seed),
             "episode_steps": int(args.episode_steps),
             "max_new_tokens": int(args.max_new_tokens),
-            "tasks": TOY_10_TASKS,
+            "tasks": tasks,
             "task_seeds": task_seeds,
             "pos": str(args.pos),
             "neg": str(args.neg),
@@ -521,7 +601,7 @@ def main():
 
     # Baseline
     base = {}
-    for task in TOY_10_TASKS:
+    for task in tasks:
         base[task] = run_episode(
             lm,
             task,
@@ -538,7 +618,7 @@ def main():
     # Steered configs
     for cfg in configs:
         cfg_out = {}
-        for task in TOY_10_TASKS:
+        for task in tasks:
             cfg_out[task] = run_episode(
                 lm,
                 task,
@@ -588,7 +668,7 @@ def main():
         return "ok"
 
     print("\n== BASELINE (first output per task) ==")
-    for task in TOY_10_TASKS:
+    for task in tasks:
         s = short_episode(base[task])
         print(
             f"{task}\tsucc={int(s['succ'])}\tsteps={s['steps']}\trew={s['rew']:.2f}\terr={summarize_output(s['err'], 60)}\t{s['out0']}"
@@ -609,7 +689,7 @@ def main():
             "action_error": 0,
             "step_exception": 0,
         }
-        for task in TOY_10_TASKS:
+        for task in tasks:
             s = short_episode(payload["episodes"][task])
             b = short_episode(base[task])
             flip = (
