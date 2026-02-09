@@ -431,8 +431,9 @@ def main():
     rng = random.Random(int(args.seed))
     task_seeds = {t: rng.randint(0, 2**31 - 1) for t in TOY_10_TASKS}
 
+    # Prefer bid-based actions for MiniWob tasks (demo_agent-style, avoids coord noise).
     action_set = HighLevelActionSet(
-        subsets=["miniwob_all"],
+        subsets=["bid", "infeas"],
         strict=False,
         multiaction=False,
         demo_mode="off",
