@@ -27,3 +27,4 @@ archive/
 *.log
 miniwob-plusplus/
 AGENTS.md
+.sisyphus/

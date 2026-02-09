@@ -257,6 +257,7 @@ def run_sweep(args):
             steer_only=args.steer_only,
             eval_seed=args.seed,
             base_records=base_records,
+            episode_steps=args.episode_steps,
         )
 
         # Append to summary
@@ -338,6 +339,12 @@ def main():
         type=int,
         default=400,
         help="Evaluation steps per run",
+    )
+    parser.add_argument(
+        "--episode-steps",
+        type=int,
+        default=10,
+        help="Maximum environment steps per episode",
     )
     parser.add_argument(
         "--tasks",

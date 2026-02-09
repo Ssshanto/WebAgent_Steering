@@ -15,7 +15,6 @@ import argparse
 import json
 import os
 import random
-import re
 
 import gymnasium as gym
 import browsergym.miniwob
@@ -210,39 +209,6 @@ def get_additional_stop_tokens(tokenizer, model_key):
 # =============================================================================
 
 
-# Tasks that are visually/spatially grounded and unfair for text-only agents.
-# Keep this list explicit for peer-review defensibility.
-EXCLUDED_TASKS = {
-    # Geometry / spatial perception
-    "bisect-angle",
-    "circle-center",
-    "draw-circle",
-    "draw-line",
-    "right-angle",
-    # Visual attributes (color/shades/shape)
-    "click-color",
-    "click-shades",
-    "click-shape",
-    "count-shape",
-    "count-sides",
-    "identify-shape",
-    "visual-addition",
-    # Pie/segment selection
-    "click-pie",
-    "click-pie-nodelay",
-    # Drag-and-drop (spatial layout dependent)
-    "drag-box",
-    "drag-circle",
-    "drag-cube",
-    "drag-items",
-    "drag-items-grid",
-    "drag-shapes",
-    "drag-shapes-2",
-    "drag-single-shape",
-    "drag-sort-numbers",
-}
-
-
 def list_miniwob_tasks():
     """Return the full MiniWob++ task list from the Gym registry."""
     env_ids = [
@@ -251,21 +217,14 @@ def list_miniwob_tasks():
         if env_id.startswith("browsergym/miniwob.")
     ]
     tasks = [env_id.split("browsergym/miniwob.", 1)[1] for env_id in env_ids]
-    tasks = [t for t in tasks if t not in EXCLUDED_TASKS]
     return sorted(tasks)
 
 
 def make_miniwob_env(task):
     """Create MiniWob env with BrowserGym-native action mapping."""
-    action_set = HighLevelActionSet(
-        subsets=["miniwob_all"],
-        strict=False,
-        multiaction=False,
-        demo_mode="off",
-    )
     return gym.make(
         f"browsergym/miniwob.{task}",
-        action_mapping=action_set.to_python_code,
+        action_mapping=DEMO_PROMPT_ACTION_SET.to_python_code,
     )
 
 
@@ -281,7 +240,7 @@ SYSTEM_PROMPT = (
 )
 
 DEMO_PROMPT_ACTION_SET = HighLevelActionSet(
-    subsets=["chat", "tab", "nav", "bid", "infeas"],
+    subsets=["miniwob_all"],
     strict=False,
     multiaction=False,
     demo_mode="off",
@@ -592,111 +551,55 @@ def build_prompt(obs, max_elems=80):
     )
 
 
-ACTION_RE = re.compile(
-    r'^(click\("\d+"\)|fill\("\d+",\s*".*"\)|select\("\d+",\s*".*"\)|noop\(\))$'
-)
+def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
+    obs, _ = env.reset(seed=seed)
+    outputs = []
+    actions = []
+    errors = []
+    total_reward = 0.0
+    success = False
 
+    for _ in range(max_steps):
+        prompt = build_prompt(obs, max_elems)
+        output = model.generate(prompt, steer=steer, max_new_tokens=max_new_tokens)
+        action = str(output or "").strip()
 
-def _normalize_action_text(text):
-    if not text:
-        return "noop()"
-    action = text.strip()
-    if not action:
-        return "noop()"
+        outputs.append(output)
+        actions.append(action)
 
-    action = action.splitlines()[0].strip()
-    action = re.sub(r"(?m)^\s*-\s+", "", action)
-    action = re.sub(r"click\(\s*(\d+)\s*\)", r'click("\1")', action)
-    action = re.sub(r"fill\(\s*(\d+)\s*,", r'fill("\1",', action)
-    action = re.sub(r"select\(\s*(\d+)\s*,", r'select("\1",', action)
-    return action
+        try:
+            obs, reward, terminated, truncated, _info = env.step(action)
+            reward = float(reward)
+            done = bool(terminated or truncated)
+            error_text = ""
+            if isinstance(obs, dict):
+                error_text = str(obs.get("last_action_error", "") or "")
+        except Exception as exc:
+            reward = 0.0
+            done = True
+            error_text = f"step_exception:{type(exc).__name__}"
 
+        total_reward += reward
+        success = success or (reward > 0)
+        errors.append(error_text)
 
-def _parse_action_kind_bid(action_text):
-    if not action_text:
-        return "invalid", None
-    s = action_text.strip()
-    if s.startswith("noop("):
-        return "noop", None
-    if s.startswith("click("):
-        m = re.search(r'click\("(\d+)"\)', s)
-        return "click", m.group(1) if m else None
-    if s.startswith("fill("):
-        m = re.search(r'fill\("(\d+)"\s*,', s)
-        return "fill", m.group(1) if m else None
-    if s.startswith("select("):
-        m = re.search(r'select\("(\d+)"\s*,', s)
-        return "select", m.group(1) if m else None
-    return "invalid", None
+        if done:
+            break
 
+    last_error = ""
+    for err in reversed(errors):
+        if err:
+            last_error = err
+            break
 
-def _dom_text(obs):
-    try:
-        return flatten_dom_to_str(obs["dom_object"])
-    except Exception:
-        return ""
-
-
-def _element_tag_for_bid(dom_text, bid):
-    if not dom_text or bid is None:
-        return None
-    m = re.search(rf"<([a-zA-Z0-9_-]+)[^>]*\bbid=\"{re.escape(str(bid))}\"", dom_text)
-    return m.group(1).lower() if m else None
-
-
-def _classify_action_failure(obs, action_text):
-    kind, bid = _parse_action_kind_bid(action_text)
-    dom_text = _dom_text(obs)
-    format_error = ACTION_RE.match((action_text or "").strip()) is None
-    bid_present = True
-    elem_tag = None
-    if bid is not None:
-        bid_present = f'bid="{bid}"' in dom_text
-        elem_tag = _element_tag_for_bid(dom_text, bid)
-    wrong_bid = bid is not None and not bid_present
-    wrong_action_type = kind in {"fill", "select"} and elem_tag not in {
-        "input",
-        "textarea",
-        "select",
-        "option",
-    }
     return {
-        "action_type": kind,
-        "bid": bid,
-        "format_error": bool(format_error),
-        "wrong_bid": bool(wrong_bid),
-        "wrong_action_type": bool(wrong_action_type),
+        "outputs": outputs,
+        "actions": actions,
+        "steps": len(actions),
+        "total_reward": total_reward,
+        "success": bool(success),
+        "error": last_error,
     }
-
-
-def _is_click_intercept(error_text):
-    txt = (error_text or "").lower()
-    return any(
-        t in txt
-        for t in [
-            "intercepts pointer events",
-            "element is not visible",
-            "timeout",
-            "not interactable",
-            "obscured",
-        ]
-    )
-
-
-def _single_step(env, action_text):
-    try:
-        obs, reward, terminated, truncated, _info = env.step(action_text)
-        error_text = ""
-        if isinstance(obs, dict):
-            error_text = str(obs.get("last_action_error", "") or "")
-        return (
-            float(reward),
-            bool(terminated or truncated),
-            bool(error_text),
-            error_text,
-        )
-    except Exception:
-        return 0.0, True, True, "step_exception"
 
 
 # =============================================================================
@@ -704,11 +607,12 @@ def _single_step(env, action_text):
 # =============================================================================
 
 
-def _get_prompt_and_image(model, obs, env, max_elems):
-    """Get prompt and image placeholder for compatibility."""
+def _get_prompt(model, obs, env, max_elems):
+    """Build text prompt for steering vector construction."""
     _ = env
+    _ = model
     prompt = build_prompt(obs, max_elems)
-    return prompt, None
+    return prompt
 
 
 def _get_hidden_state_offset(model, states):
@@ -720,7 +624,7 @@ def _get_hidden_state_offset(model, states):
     return num_states - num_layers
 
 
-def _compute_activation_diff(model, pos, neg, max_new_tokens, image=None):
+def _compute_activation_diff(model, pos, neg, max_new_tokens):
     """Compute activation difference for a contrastive pair across all layers.
 
     Returns:
@@ -800,22 +704,17 @@ def compute_vector(
                 seed_val = rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed_val)
 
-                # Get prompt and image based on model type
-                base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
+                base_prompt = _get_prompt(model, obs, env, max_elems)
 
                 # Vector A: format_accuracy
                 pos_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
                 neg_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
-                diffs_a = _compute_activation_diff(
-                    model, pos_a, neg_a, max_new_tokens, image
-                )
+                diffs_a = _compute_activation_diff(model, pos_a, neg_a, max_new_tokens)
 
                 # Vector B: composite_1
                 pos_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
                 neg_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
-                diffs_b = _compute_activation_diff(
-                    model, pos_b, neg_b, max_new_tokens, image
-                )
+                diffs_b = _compute_activation_diff(model, pos_b, neg_b, max_new_tokens)
 
                 # Accumulate for each layer
                 for layer_idx in diffs_a.keys():
@@ -884,13 +783,12 @@ def compute_vector(
             seed_val = rng.randint(0, 2**31 - 1)
             obs, _ = env.reset(seed=seed_val)
 
-            # Get prompt and image based on model type
-            base_prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
+            base_prompt = _get_prompt(model, obs, env, max_elems)
             pos = f"{base_prompt}\n{pos_instr}"
             neg = f"{base_prompt}\n{neg_instr}"
 
             # Compute activation difference for all layers
-            diffs = _compute_activation_diff(model, pos, neg, max_new_tokens, image)
+            diffs = _compute_activation_diff(model, pos, neg, max_new_tokens)
 
             # Accumulate for each layer
             for layer_idx, diff in diffs.items():
@@ -963,6 +861,7 @@ def evaluate(
     steer_only=False,
     eval_seed=0,
     base_records=None,
+    episode_steps=10,
 ):
     """Evaluate model on tasks, comparing baseline vs steered."""
     if base_only and steer_only:
@@ -972,8 +871,8 @@ def evaluate(
 
     base_hits = 0
     steer_hits = 0
-    parse_fails_base = 0
-    parse_fails_steer = 0
+    error_episodes_base = 0
+    error_episodes_steer = 0
     total = 0
     base_total = 0
 
@@ -990,9 +889,6 @@ def evaluate(
             for _ in range(steps_per_task):
                 seed = seed_rng.randint(0, 2**31 - 1)
                 obs, _ = env.reset(seed=seed)
-
-                # Get prompt and image based on model type
-                prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
 
                 record = {"task": task, "seed": seed}
                 base_success = None
@@ -1013,112 +909,87 @@ def evaluate(
                     record.update(
                         {
                             "base_output": base_record.get("base_output"),
+                            "base_outputs": base_record.get("base_outputs", []),
                             "base_action": base_action,
+                            "base_actions": base_record.get("base_actions", []),
+                            "base_steps": base_record.get("base_steps"),
+                            "base_total_reward": base_record.get("base_total_reward"),
                             "base_success": base_success,
                             "base_error": base_error,
-                            "base_action_type": base_record.get("base_action_type"),
-                            "base_bid": base_record.get("base_bid"),
-                            "base_format_error": bool(
-                                base_record.get("base_format_error", False)
-                            ),
-                            "base_wrong_bid": bool(
-                                base_record.get("base_wrong_bid", False)
-                            ),
-                            "base_wrong_action_type": bool(
-                                base_record.get("base_wrong_action_type", False)
-                            ),
-                            "base_click_intercept": bool(
-                                base_record.get(
-                                    "base_click_intercept",
-                                    _is_click_intercept(base_error),
-                                )
-                            ),
+                            "base_error_episode": bool(base_failed),
                         }
                     )
                     if base_success is not None:
                         base_hits += int(base_success)
                         base_total += 1
                     if base_failed:
-                        parse_fails_base += 1
+                        error_episodes_base += 1
                 else:
-                    # Baseline
-                    if image is not None:
-                        base_out = model.generate(
-                            prompt,
-                            steer=False,
-                            max_new_tokens=max_new_tokens,
-                            image=image,
-                        )
-                    else:
-                        base_out = model.generate(
-                            prompt, steer=False, max_new_tokens=max_new_tokens
-                        )
-
-                    base_action = _normalize_action_text(base_out)
-                    base_diag = _classify_action_failure(obs, base_action)
-                    base_reward, _, base_failed, base_error = _single_step(
-                        env, base_action
+                    base_episode = _run_episode(
+                        env,
+                        model,
+                        seed,
+                        episode_steps,
+                        max_elems,
+                        max_new_tokens,
+                        steer=False,
                     )
-                    base_success = base_reward > 0
+                    base_success = base_episode["success"]
+                    base_error = base_episode["error"]
                     base_hits += int(base_success)
                     base_total += 1
-                    if base_failed:
-                        parse_fails_base += 1
+                    if base_error:
+                        error_episodes_base += 1
 
                     record.update(
                         {
-                            "base_output": base_out,
-                            "base_action": base_action,
+                            "base_output": base_episode["outputs"][-1]
+                            if base_episode["outputs"]
+                            else "",
+                            "base_outputs": base_episode["outputs"],
+                            "base_action": base_episode["actions"][-1]
+                            if base_episode["actions"]
+                            else "",
+                            "base_actions": base_episode["actions"],
+                            "base_steps": base_episode["steps"],
+                            "base_total_reward": base_episode["total_reward"],
                             "base_success": base_success,
                             "base_error": base_error,
-                            "base_action_type": base_diag["action_type"],
-                            "base_bid": base_diag["bid"],
-                            "base_format_error": base_diag["format_error"],
-                            "base_wrong_bid": base_diag["wrong_bid"],
-                            "base_wrong_action_type": base_diag["wrong_action_type"],
-                            "base_click_intercept": _is_click_intercept(base_error),
+                            "base_error_episode": bool(base_error),
                         }
                     )
 
                 if not base_only:
-                    # Steered - reset and get prompt/image again
-                    obs, _ = env.reset(seed=seed)
-                    prompt, image = _get_prompt_and_image(model, obs, env, max_elems)
-
-                    if image is not None:
-                        steer_out = model.generate(
-                            prompt,
-                            steer=True,
-                            max_new_tokens=max_new_tokens,
-                            image=image,
-                        )
-                    else:
-                        steer_out = model.generate(
-                            prompt, steer=True, max_new_tokens=max_new_tokens
-                        )
-
-                    steer_action = _normalize_action_text(steer_out)
-                    steer_diag = _classify_action_failure(obs, steer_action)
-                    steer_reward, _, steer_failed, steer_error = _single_step(
-                        env, steer_action
+                    steer_episode = _run_episode(
+                        env,
+                        model,
+                        seed,
+                        episode_steps,
+                        max_elems,
+                        max_new_tokens,
+                        steer=True,
                     )
-                    steer_success = steer_reward > 0
+                    steer_success = steer_episode["success"]
+                    steer_error = steer_episode["error"]
                     steer_hits += int(steer_success)
-                    if steer_failed:
-                        parse_fails_steer += 1
+                    if steer_error:
+                        error_episodes_steer += 1
 
                     record.update(
                         {
-                            "steer_output": steer_out,
-                            "steer_action": steer_action,
+                            "steer_output": steer_episode["outputs"][-1]
+                            if steer_episode["outputs"]
+                            else "",
+                            "steer_outputs": steer_episode["outputs"],
+                            "steer_action": steer_episode["actions"][-1]
+                            if steer_episode["actions"]
+                            else "",
+                            "steer_actions": steer_episode["actions"],
+                            "steer_steps": steer_episode["steps"],
+                            "steer_total_reward": steer_episode["total_reward"],
                             "steer_success": steer_success,
                             "steer_error": steer_error,
-                            "steer_action_type": steer_diag["action_type"],
-                            "steer_bid": steer_diag["bid"],
-                            "steer_format_error": steer_diag["format_error"],
-                            "steer_wrong_bid": steer_diag["wrong_bid"],
-                            "steer_wrong_action_type": steer_diag["wrong_action_type"],
-                            "steer_click_intercept": _is_click_intercept(steer_error),
+                            "steer_error_episode": bool(steer_error),
                         }
                     )
 
@@ -1151,8 +1022,10 @@ def evaluate(
         "base_accuracy": base_acc,
         "steer_accuracy": steer_acc,
         "improvement": steer_acc - base_acc,
-        "base_parse_fail": parse_fails_base / max(1, base_total),
-        "steer_parse_fail": parse_fails_steer / max(1, total) if not base_only else 0,
+        "base_parse_fail": error_episodes_base / max(1, base_total),
+        "steer_parse_fail": error_episodes_steer / max(1, total)
+        if not base_only
+        else 0,
         "total_episodes": total,
     }
 
@@ -1179,6 +1052,7 @@ def main():
     )
     parser.add_argument("--train-steps", type=int, default=200)
     parser.add_argument("--eval-steps", type=int, default=400)
+    parser.add_argument("--episode-steps", type=int, default=10)
     parser.add_argument("--tasks", default="all", help="Task list or 'all'")
     parser.add_argument("--out", default="results.jsonl")
     parser.add_argument("--seed", type=int, default=0)
@@ -1294,6 +1168,7 @@ def main():
         args.steer_only,
         eval_seed=args.seed,
         base_records=base_records,
+        episode_steps=args.episode_steps,
     )
 
     # Print results
