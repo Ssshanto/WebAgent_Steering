@@ -762,6 +762,8 @@ class SteeredModel:
         self.vectors = {}  # Dictionary mapping layer_idx -> vector tensor
         self._vector_cache = {}
         self.steer_action_window = steer_action_window
+        self.intervention_mode = "add_vector"
+        self.intervention_scale = 1.0
 
     def _last_token_state(self, text):
         """Extract activation from last token of text for all layers."""
@@ -824,7 +826,7 @@ class SteeredModel:
         hook_calls = {"count": 0}
 
         def hook(_module, _input, output):
-            if not steer or self.vector is None:
+            if not steer:
                 return output
             hook_calls["count"] += 1
             if self.steer_action_window and hook_calls["count"] == 1:
@@ -834,6 +836,23 @@ class SteeredModel:
             elif isinstance(output, tuple) and output and torch.is_tensor(output[0]):
                 target = output[0]
             else:
+                return output
+
+            if self.intervention_mode == "scale":
+                if target.dim() == 3:
+                    target[:, -1, :] *= float(self.intervention_scale)
+                elif target.dim() == 2:
+                    target[-1, :] *= float(self.intervention_scale)
+                return output
+
+            if self.intervention_mode == "zero":
+                if target.dim() == 3:
+                    target[:, -1, :] *= 0.0
+                elif target.dim() == 2:
+                    target[-1, :] *= 0.0
+                return output
+
+            if self.vector is None:
                 return output
 
             vec = self._vector_cache.get(target.device)
