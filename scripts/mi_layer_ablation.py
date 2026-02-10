@@ -13,7 +13,13 @@ import torch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from miniwob_steer import MODEL_MAP, SteeredModel, evaluate, resolve_tasks
+from miniwob_steer import (
+    MODEL_MAP,
+    SteeredModel,
+    evaluate,
+    load_base_jsonl,
+    resolve_tasks,
+)
 
 
 def parse_range_or_list(spec):
@@ -44,10 +50,20 @@ def run_scan(args):
     layers = parse_range_or_list(args.layers)
     scales = parse_scales(args.scales)
 
+    if args.base_only and args.steer_only:
+        raise ValueError("Cannot set both --base-only and --steer-only")
+
     if not layers:
         raise ValueError("No layers parsed from --layers")
     if not scales:
         raise ValueError("No scales parsed from --scales")
+
+    base_records = None
+    base_manifest = None
+    if args.steer_only:
+        if not args.base_jsonl:
+            raise ValueError("--steer-only requires --base-jsonl")
+        base_records, base_manifest = load_base_jsonl(args.base_jsonl)
 
     os.makedirs(args.out_dir, exist_ok=True)
     summary_path = args.summary_path or os.path.join(
@@ -86,70 +102,78 @@ def run_scan(args):
     )
     writer.writeheader()
 
+    iterations = [(int(layer), float(scale)) for layer in layers for scale in scales]
+    if args.base_only and len(iterations) > 1:
+        iterations = [iterations[0]]
+
     results_list = []
-    for layer in layers:
-        for scale in scales:
-            model.layer_idx = int(layer)
-            model.intervention_mode = "scale"
-            model.intervention_scale = float(scale)
-            model.vector = None
-            model.vectors.clear()
-            model._vector_cache.clear()
+    for layer, scale in iterations:
+        model.layer_idx = int(layer)
+        model.intervention_mode = "scale"
+        model.intervention_scale = float(scale)
+        model.vector = None
+        model.vectors.clear()
+        model._vector_cache.clear()
 
-            out_jsonl = os.path.join(
-                args.out_dir,
-                f"{args.model}_L{int(layer)}_scale{scale_tag(scale)}.jsonl",
-            )
+        out_jsonl = os.path.join(
+            args.out_dir,
+            f"{args.model}_L{int(layer)}_scale{scale_tag(scale)}.jsonl",
+        )
 
-            res = evaluate(
-                model,
-                tasks,
-                args.max_elems,
-                args.max_new_tokens,
-                out_jsonl,
-                base_only=False,
-                steer_only=False,
-                eval_seed=args.seed,
-                episode_steps=args.episode_steps,
-                quiet=args.quiet,
-                show_progress=not args.no_progress and not args.quiet,
-                strict_action_prompt=args.strict_action_prompt,
-                run_metadata={
-                    "entrypoint": "scripts/mi_layer_ablation.py",
-                    "model_alias": args.model,
-                    "model_name": MODEL_MAP[args.model],
-                    "layer": int(layer),
-                    "intervention_mode": "scale",
-                    "intervention_scale": float(scale),
-                    "seed": int(args.seed),
-                    "episode_steps": int(args.episode_steps),
-                    "max_elems": int(args.max_elems),
-                    "max_new_tokens": int(args.max_new_tokens),
-                    "strict_action_prompt": bool(args.strict_action_prompt),
-                    "task_manifest": args.task_manifest,
-                },
-            )
-
-            row = {
+        res = evaluate(
+            model,
+            tasks,
+            args.max_elems,
+            args.max_new_tokens,
+            out_jsonl,
+            base_only=args.base_only,
+            steer_only=args.steer_only,
+            eval_seed=args.seed,
+            base_records=base_records,
+            base_manifest=base_manifest,
+            episode_steps=args.episode_steps,
+            quiet=args.quiet,
+            show_progress=not args.no_progress and not args.quiet,
+            strict_action_prompt=args.strict_action_prompt,
+            run_metadata={
+                "entrypoint": "scripts/mi_layer_ablation.py",
+                "model_alias": args.model,
+                "model_name": MODEL_MAP[args.model],
                 "layer": int(layer),
-                "scale": float(scale),
-                "base_acc": f"{res['base_accuracy']:.4f}",
-                "ablated_acc": f"{res['steer_accuracy']:.4f}",
-                "delta": f"{res['improvement']:+.4f}",
-                "base_parse_fail": f"{res['base_parse_fail']:.4f}",
-                "ablated_parse_fail": f"{res['steer_parse_fail']:.4f}",
-                "base_a_err": f"{res['base_action_type_error_episode_rate']:.4f}",
-                "ablated_a_err": f"{res['steer_action_type_error_episode_rate']:.4f}",
-                "base_g_err": f"{res['base_bid_grounding_error_episode_rate']:.4f}",
-                "ablated_g_err": f"{res['steer_bid_grounding_error_episode_rate']:.4f}",
-                "base_s_err": f"{res['base_syntax_error_episode_rate']:.4f}",
-                "ablated_s_err": f"{res['steer_syntax_error_episode_rate']:.4f}",
-                "total_episodes": int(res["total_episodes"]),
-                "output": out_jsonl,
-            }
-            writer.writerow(row)
-            summary_file.flush()
-            results_list.append(row)
+                "intervention_mode": "scale",
+                "intervention_scale": float(scale),
+                "seed": int(args.seed),
+                "episode_steps": int(args.episode_steps),
+                "max_elems": int(args.max_elems),
+                "max_new_tokens": int(args.max_new_tokens),
+                "strict_action_prompt": bool(args.strict_action_prompt),
+                "task_manifest": args.task_manifest,
+                "base_only": bool(args.base_only),
+                "steer_only": bool(args.steer_only),
+                "base_jsonl": args.base_jsonl,
+            },
+        )
+
+        row = {
+            "layer": int(layer),
+            "scale": float(scale),
+            "base_acc": f"{res['base_accuracy']:.4f}",
+            "ablated_acc": f"{res['steer_accuracy']:.4f}",
+            "delta": f"{res['improvement']:+.4f}",
+            "base_parse_fail": f"{res['base_parse_fail']:.4f}",
+            "ablated_parse_fail": f"{res['steer_parse_fail']:.4f}",
+            "base_a_err": f"{res['base_action_type_error_episode_rate']:.4f}",
+            "ablated_a_err": f"{res['steer_action_type_error_episode_rate']:.4f}",
+            "base_g_err": f"{res['base_bid_grounding_error_episode_rate']:.4f}",
+            "ablated_g_err": f"{res['steer_bid_grounding_error_episode_rate']:.4f}",
+            "base_s_err": f"{res['base_syntax_error_episode_rate']:.4f}",
+            "ablated_s_err": f"{res['steer_syntax_error_episode_rate']:.4f}",
+            "total_episodes": int(res["total_episodes"]),
+            "output": out_jsonl,
+        }
+        writer.writerow(row)
+        summary_file.flush()
+        results_list.append(row)
 
     summary_file.close()
 
@@ -189,6 +213,9 @@ def main():
     ap.add_argument("--max-new-tokens", type=int, default=80)
     ap.add_argument("--out-dir", default="results/mi_layer_ablation")
     ap.add_argument("--summary-path", default=None)
+    ap.add_argument("--base-only", action="store_true")
+    ap.add_argument("--steer-only", action="store_true")
+    ap.add_argument("--base-jsonl", default=None)
     ap.add_argument("--action-window", action="store_true")
     ap.add_argument("--strict-action-prompt", action="store_true")
     ap.add_argument("--quiet", action="store_true")
