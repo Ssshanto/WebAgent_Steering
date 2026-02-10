@@ -158,8 +158,8 @@ def build_command(job_config: Dict[str, Any]) -> str:
         "prompt_type": "--prompt-type",
         "vector_method": "--vector-method",
         "train_steps": "--train-steps",
-        "eval_steps": "--eval-steps",
         "tasks": "--tasks",
+        "task_manifest": "--task-manifest",
         "output_dir": "--out-dir",
         "cache_dir": "--cache-dir",
         "seed": "--seed",
@@ -180,6 +180,14 @@ def build_command(job_config: Dict[str, Any]) -> str:
         parts.append("--steer-only")
     if job_config.get("force_recompute"):
         parts.append("--force-recompute")
+    if job_config.get("quiet"):
+        parts.append("--quiet")
+    if job_config.get("no_progress"):
+        parts.append("--no-progress")
+    if job_config.get("strict_action_prompt"):
+        parts.append("--strict-action-prompt")
+    if job_config.get("random_control"):
+        parts.append("--random-control")
 
     # Optional with value
     if "base_jsonl" in job_config:
@@ -356,16 +364,29 @@ def cmd_run(args):
             rc = 0
         else:
             start_time = datetime.now()
-            result = subprocess.run(
-                job.command,
-                shell=True,
-                cwd=os.getcwd(),
-            )
+            if args.capture_worker_output:
+                result = subprocess.run(
+                    job.command,
+                    shell=True,
+                    cwd=os.getcwd(),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                )
+            else:
+                result = subprocess.run(
+                    job.command,
+                    shell=True,
+                    cwd=os.getcwd(),
+                )
             rc = result.returncode
             elapsed = datetime.now() - start_time
 
             print(f"\nReturn code: {rc}")
             print(f"Elapsed: {elapsed}")
+            if args.capture_worker_output and rc != 0:
+                print("Worker output (failure):")
+                print(result.stdout or "")
 
         # Update job status
         job.return_code = rc
@@ -540,6 +561,11 @@ def main():
     )
     run_parser.add_argument(
         "--dry-run", action="store_true", help="Print commands without executing"
+    )
+    run_parser.add_argument(
+        "--capture-worker-output",
+        action="store_true",
+        help="Capture worker stdout/stderr; print only on failure",
     )
     run_parser.set_defaults(func=cmd_run)
 

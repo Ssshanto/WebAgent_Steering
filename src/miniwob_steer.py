@@ -1,20 +1,28 @@
 """
 Representation Engineering for Web Agents
 =========================================
-Steering LLM web agents via Contrastive Activation Addition (CAA).
+Inference-time mechanistic interpretability and steering for MiniWob web agents.
 
-This script implements zero-shot steering for MiniWob++ benchmark tasks.
-The hypothesis: steering can improve action-space understanding without
-task-specific fine-tuning.
+This script implements zero-shot intervention/evaluation loops for MiniWob tasks.
+The hypothesis: validated mechanism-targeted interventions can improve specific
+action-competence factors without task-specific fine-tuning.
 
 Supports:
 - Text-only LLMs (Qwen, Llama, Gemma, Phi, SmolLM)
 """
 
 import argparse
+import ast
+import copy
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 import random
+import re
+import subprocess
+import warnings
+from pathlib import Path
 
 import gymnasium as gym
 import browsergym.miniwob
@@ -24,6 +32,7 @@ import torch
 from browsergym.utils.obs import flatten_dom_to_str, flatten_axtree_to_str, prune_html
 from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import logging as hf_logging
 
 # =============================================================================
 # MODEL CONFIGURATION
@@ -63,6 +72,10 @@ LAYER_MAP = {
     "qwen-7b": 16,  # 32 layers → L16 (50%)
     "qwen-1.5b": 14,  # 28 layers → L14 (50%)
     "qwen-coder-0.5b": 11,  # 24 layers → L11 (46%)
+    "qwen3-0.6b": 14,
+    "qwen3-1.7b": 14,
+    "qwen3-4b": 18,
+    "qwen3-8b": 18,
     "llama-1b": 8,  # 16 layers → L8 (50%)
     "llama-3b": 14,  # 28 layers → L14 (50%)
     "gemma-2b": 13,  # 26 layers → L13 (50%)
@@ -107,9 +120,369 @@ MODEL_ARCH = {
 # Models that don't support chat templates (need raw prompting)
 NO_CHAT_TEMPLATE = {"opt-iml-1.3b"}
 
+VECTOR_CACHE_SCHEMA = 1
+
+# Conservative heuristic sets for factorized episode diagnostics.
+# These are used for reporting scaffolding, not hard benchmark labels.
+BID_REQUIRED_ACTIONS = {
+    "click",
+    "dblclick",
+    "hover",
+    "focus",
+    "clear",
+    "type",
+    "fill",
+    "check",
+    "uncheck",
+    "select_option",
+    "click_option",
+    "right_click",
+    "drag_and_drop",
+    "upload_file",
+}
+
+SYNTAX_ERROR_KEYWORDS = (
+    "syntax",
+    "parse",
+    "malformed",
+    "invalid action",
+    "invalid command",
+    "unexpected",
+    "step_exception:syntaxerror",
+)
+
+GROUNDING_ERROR_KEYWORDS = (
+    "bid",
+    "element",
+    "not found",
+    "missing",
+    "non-interactable",
+    "not interactable",
+    "not clickable",
+    "stale",
+)
+
+ACTION_TYPE_ERROR_KEYWORDS = (
+    "action type",
+    "unsupported",
+    "not allowed",
+    "cannot",
+    "mismatch",
+    "invalid operation",
+)
+
+BID_VALUE_RE = re.compile(r"^[0-9]+$")
+
+
+def _utc_now_iso():
+    return (
+        datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
+    )
+
+
+def _git_sha(repo_root=None):
+    root = (
+        Path(repo_root)
+        if repo_root is not None
+        else Path(__file__).resolve().parents[1]
+    )
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"], cwd=root, text=True
+        ).strip()
+    except Exception:
+        return "unknown"
+
+
+def _stable_hash(value):
+    blob = json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+
+def _task_list_hash(tasks):
+    joined = "\n".join(sorted(str(t) for t in tasks))
+    return hashlib.sha256(joined.encode("utf-8")).hexdigest()
+
+
+def derive_episode_seed(global_seed, namespace, task, episode_idx):
+    payload = {
+        "global_seed": int(global_seed),
+        "namespace": str(namespace),
+        "task": str(task),
+        "episode_idx": int(episode_idx),
+    }
+    digest = _stable_hash(payload)
+    return int(digest[:8], 16) & 0x7FFFFFFF
+
+
+def build_vector_cache_spec(
+    cache_dir,
+    model_alias,
+    seed,
+    prompt_type,
+    vector_method,
+    train_steps,
+    max_elems,
+    max_new_tokens,
+    strict_action_prompt,
+    tasks,
+):
+    config = {
+        "schema": VECTOR_CACHE_SCHEMA,
+        "model_alias": str(model_alias),
+        "seed": int(seed),
+        "prompt_type": str(prompt_type),
+        "vector_method": str(vector_method),
+        "train_steps": int(train_steps),
+        "max_elems": int(max_elems),
+        "max_new_tokens": int(max_new_tokens),
+        "strict_action_prompt": bool(strict_action_prompt),
+        "task_count": int(len(tasks)),
+        "task_hash": _task_list_hash(tasks),
+    }
+    config_hash = _stable_hash(config)[:16]
+    subdir = os.path.join(
+        cache_dir,
+        str(model_alias),
+        f"seed_{int(seed)}",
+        f"{str(prompt_type)}_{config_hash}",
+    )
+    return {
+        "config": config,
+        "config_hash": config_hash,
+        "subdir": subdir,
+        "meta_path": os.path.join(subdir, "vector_meta.json"),
+    }
+
+
+def vector_cache_file(cache_spec, layer_idx):
+    return os.path.join(cache_spec["subdir"], f"L{int(layer_idx)}.pt")
+
+
+def write_vector_cache_metadata(cache_spec):
+    os.makedirs(cache_spec["subdir"], exist_ok=True)
+    payload = {
+        "generated_at_utc": _utc_now_iso(),
+        "git_sha": _git_sha(),
+        "config_hash": cache_spec["config_hash"],
+        "config": cache_spec["config"],
+    }
+    with open(cache_spec["meta_path"], "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        f.write("\n")
+
+
+def validate_vector_cache_metadata(cache_spec):
+    if not os.path.exists(cache_spec["meta_path"]):
+        return False
+    try:
+        with open(cache_spec["meta_path"], "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        return False
+
+    meta_hash = str(data.get("config_hash", ""))
+    if meta_hash != cache_spec["config_hash"]:
+        return False
+
+    meta_config = data.get("config")
+    if not isinstance(meta_config, dict):
+        return False
+    return meta_config == cache_spec["config"]
+
+
+def resolve_tasks(tasks_arg, task_manifest_path=None):
+    if task_manifest_path:
+        manifest = Path(task_manifest_path)
+        if manifest.exists():
+            loaded = json.loads(manifest.read_text(encoding="utf-8"))
+            if isinstance(loaded, dict):
+                manifest_tasks = loaded.get("tasks", [])
+            else:
+                manifest_tasks = loaded
+            tasks = [str(t) for t in manifest_tasks]
+            if tasks_arg != "all":
+                requested = [t.strip() for t in tasks_arg.split(",") if t.strip()]
+                missing = sorted(set(requested) - set(tasks))
+                if missing:
+                    raise ValueError(
+                        "Requested tasks not present in manifest: " + ",".join(missing)
+                    )
+                tasks = requested
+            return tasks
+
+    if tasks_arg == "all":
+        tasks = list_miniwob_tasks()
+    else:
+        tasks = [t.strip() for t in tasks_arg.split(",") if t.strip()]
+
+    if task_manifest_path:
+        manifest = Path(task_manifest_path)
+        manifest.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "generated_at_utc": _utc_now_iso(),
+            "git_sha": _git_sha(),
+            "source": "all" if tasks_arg == "all" else "explicit",
+            "task_count": len(tasks),
+            "tasks": tasks,
+        }
+        manifest.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    return tasks
+
+
+def _truncate_lines(text, max_lines, section_label):
+    if max_lines is None:
+        return text
+    max_lines = int(max_lines)
+    if max_lines <= 0:
+        return ""
+    lines = text.splitlines()
+    if len(lines) <= max_lines:
+        return text
+    kept = "\n".join(lines[:max_lines])
+    omitted = len(lines) - max_lines
+    return f"{kept}\n... [{section_label} truncated: {omitted} lines omitted]"
+
+
+def _contains_any_keyword(text, keywords):
+    low = str(text or "").lower()
+    return any(k in low for k in keywords)
+
+
+def _node_scalar(node):
+    if isinstance(node, ast.Constant):
+        if isinstance(node.value, (str, int)):
+            return str(node.value)
+    if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.USub):
+        if isinstance(node.operand, ast.Constant) and isinstance(
+            node.operand.value, int
+        ):
+            return str(-node.operand.value)
+    return None
+
+
+def _looks_like_bid(value):
+    s = str(value or "").strip()
+    if not s:
+        return False
+    if BID_VALUE_RE.match(s):
+        return True
+    if s.startswith("bid-") and BID_VALUE_RE.match(s[4:]):
+        return True
+    return False
+
+
+def _parse_action_signature(action):
+    parsed = {
+        "parse_ok": False,
+        "action_type": "",
+        "bids": [],
+        "bid_required": False,
+    }
+    raw = str(action or "").strip()
+    if not raw:
+        return parsed
+
+    try:
+        expr = ast.parse(raw, mode="eval").body
+    except Exception:
+        return parsed
+
+    if not isinstance(expr, ast.Call):
+        return parsed
+
+    if isinstance(expr.func, ast.Name):
+        action_type = expr.func.id
+    elif isinstance(expr.func, ast.Attribute):
+        action_type = expr.func.attr
+    else:
+        action_type = ""
+
+    bids = []
+    for kw in expr.keywords:
+        if kw.arg and "bid" in kw.arg.lower():
+            value = _node_scalar(kw.value)
+            if value is not None:
+                bids.append(value)
+
+    if action_type in BID_REQUIRED_ACTIONS and expr.args:
+        value = _node_scalar(expr.args[0])
+        if value is not None and _looks_like_bid(value):
+            bids.append(value)
+
+    parsed["parse_ok"] = bool(action_type)
+    parsed["action_type"] = action_type
+    parsed["bids"] = bids
+    parsed["bid_required"] = action_type in BID_REQUIRED_ACTIONS
+    return parsed
+
+
+def classify_action_step(action, error_text):
+    sig = _parse_action_signature(action)
+    parse_ok = sig["parse_ok"]
+    has_bid = len(sig["bids"]) > 0 and any(str(x).strip() for x in sig["bids"])
+    bid_required = sig["bid_required"]
+
+    syntax_flag = (not parse_ok) or _contains_any_keyword(
+        error_text, SYNTAX_ERROR_KEYWORDS
+    )
+    has_grounding_keyword = _contains_any_keyword(error_text, GROUNDING_ERROR_KEYWORDS)
+    has_action_type_keyword = _contains_any_keyword(
+        error_text, ACTION_TYPE_ERROR_KEYWORDS
+    )
+
+    grounding_flag = (
+        parse_ok and bid_required and (not has_bid)
+    ) or has_grounding_keyword
+    action_type_flag = has_action_type_keyword
+
+    action_type_known = bool(parse_ok or has_action_type_keyword)
+    bid_grounding_known = bool(parse_ok or has_grounding_keyword)
+
+    action_type_status = (
+        "unknown" if not action_type_known else ("error" if action_type_flag else "ok")
+    )
+    bid_grounding_status = (
+        "unknown" if not bid_grounding_known else ("error" if grounding_flag else "ok")
+    )
+    syntax_status = "error" if syntax_flag else "ok"
+
+    return {
+        "action_type": sig["action_type"],
+        "parse_ok": bool(parse_ok),
+        "action_type_known": action_type_known,
+        "bid_grounding_known": bid_grounding_known,
+        "syntax_ok": not syntax_flag,
+        "bid_grounding_ok": not grounding_flag,
+        "action_type_ok": not action_type_flag,
+        "syntax_status": syntax_status,
+        "action_type_status": action_type_status,
+        "bid_grounding_status": bid_grounding_status,
+    }
+
+
+def write_run_manifest(out_path, manifest_payload):
+    meta_path = f"{out_path}.meta.json"
+    with open(meta_path, "w", encoding="utf-8") as f:
+        json.dump(manifest_payload, f, indent=2)
+        f.write("\n")
+
 
 def _apply_template(tokenizer, messages, model_key):
     """Apply chat template with model-specific options."""
+
+    def _fallback_plain():
+        rendered = []
+        for m in messages:
+            role = str(m.get("role", "user")).strip().title()
+            content = str(m.get("content", ""))
+            rendered.append(f"{role}: {content}")
+        text = "\n".join(rendered) + "\nAssistant:"
+        if model_key and model_key.startswith("qwen3-"):
+            text = f"{text}\n/no_think"
+        return text
+
     # Qwen3 defaults to reasoning mode; disable it for action-only outputs.
     if model_key and model_key.startswith("qwen3-"):
         try:
@@ -119,15 +492,21 @@ def _apply_template(tokenizer, messages, model_key):
                 add_generation_prompt=True,
                 enable_thinking=False,
             )
-        except TypeError:
-            text = tokenizer.apply_chat_template(
-                messages, tokenize=False, add_generation_prompt=True
-            )
-            return f"{text}\n/no_think"
+        except Exception:
+            try:
+                text = tokenizer.apply_chat_template(
+                    messages, tokenize=False, add_generation_prompt=True
+                )
+                return f"{text}\n/no_think"
+            except Exception:
+                return _fallback_plain()
 
-    return tokenizer.apply_chat_template(
-        messages, tokenize=False, add_generation_prompt=True
-    )
+    try:
+        return tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+    except Exception:
+        return _fallback_plain()
 
 
 def get_layer(model_key, layer_arg):
@@ -431,7 +810,7 @@ class SteeredModel:
                 self.vector = tensor_vec
         self._vector_cache.clear()
 
-    def generate(self, prompt, steer=False, max_new_tokens=80, deterministic=False):
+    def generate(self, prompt, steer=False, max_new_tokens=80, deterministic=True):
         """Generate text, optionally with steering."""
         if self.use_chat_template:
             messages = [{"role": "user", "content": prompt}]
@@ -470,6 +849,12 @@ class SteeredModel:
 
         # Get layers based on model architecture
         layers = get_model_layers(self.model, self.model_key)
+        num_layers = len(layers)
+        if not (0 <= int(self.layer_idx) < num_layers):
+            raise ValueError(
+                f"layer_idx={self.layer_idx} out of range for {self.model_key} "
+                f"(valid: 0..{num_layers - 1})"
+            )
         handle = layers[self.layer_idx].register_forward_hook(hook)
         gen_kwargs = {
             "max_new_tokens": max_new_tokens,
@@ -477,14 +862,24 @@ class SteeredModel:
             "pad_token_id": self.tokenizer.pad_token_id or self.tokenizer.eos_token_id,
         }
         if self.model_key and self.model_key.startswith("qwen3-"):
-            gen_kwargs.update(
-                {
-                    "do_sample": not deterministic,
-                    "temperature": 0.7,
-                    "top_p": 0.8,
-                    "top_k": 20,
-                }
-            )
+            gen_config = copy.deepcopy(self.model.generation_config)
+            if deterministic:
+                gen_config.do_sample = False
+                for k in (
+                    "temperature",
+                    "top_p",
+                    "top_k",
+                    "typical_p",
+                    "penalty_alpha",
+                ):
+                    if hasattr(gen_config, k):
+                        setattr(gen_config, k, None)
+            else:
+                gen_config.do_sample = True
+                gen_config.temperature = 0.7
+                gen_config.top_p = 0.8
+                gen_config.top_k = 20
+            gen_kwargs["generation_config"] = gen_config
         else:
             gen_kwargs["do_sample"] = False
 
@@ -503,11 +898,12 @@ class SteeredModel:
 # =============================================================================
 
 
-def build_prompt(obs, max_elems=80):
+def build_prompt(obs, max_elems=80, strict_action_prompt=False):
     """Build BrowserGym demo_agent-style prompt from observation."""
-    _ = max_elems
     dom_text = prune_html(flatten_dom_to_str(obs["dom_object"]))
     axtree_text = flatten_axtree_to_str(obs["axtree_object"])
+    dom_text = _truncate_lines(dom_text, max_elems, "DOM")
+    axtree_text = _truncate_lines(axtree_text, max_elems, "AXTree")
 
     goal = obs.get("goal", "")
     goal_obj = obs.get("goal_object")
@@ -537,6 +933,19 @@ def build_prompt(obs, max_elems=80):
         with_examples=True,
     )
 
+    if strict_action_prompt:
+        next_action_block = (
+            "# Next action\n"
+            "Output exactly one valid BrowserGym action command. "
+            "No explanation. No markdown."
+        )
+    else:
+        next_action_block = (
+            "# Next action\n"
+            "You will now think step by step and produce your next best action. Reflect on your past actions, "
+            "any resulting error message, and the current state of the page before deciding on your next action."
+        )
+
     return (
         f"{SYSTEM_PROMPT}\n\n"
         f"# Goal\n{goal}\n\n"
@@ -545,22 +954,30 @@ def build_prompt(obs, max_elems=80):
         f"# Current page DOM\n{dom_text}\n\n"
         f"# Action Space\n\n{action_space}\n\n"
         f"# Error message from last action\n\n{obs.get('last_action_error', '')}\n\n"
-        "# Next action\n"
-        "You will now think step by step and produce your next best action. Reflect on your past actions, "
-        "any resulting error message, and the current state of the page before deciding on your next action."
+        f"{next_action_block}"
     )
 
 
-def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
+def _run_episode(
+    env,
+    model,
+    seed,
+    max_steps,
+    max_elems,
+    max_new_tokens,
+    steer,
+    strict_action_prompt=False,
+):
     obs, _ = env.reset(seed=seed)
     outputs = []
     actions = []
     errors = []
+    step_analysis = []
     total_reward = 0.0
     success = False
 
-    for _ in range(max_steps):
-        prompt = build_prompt(obs, max_elems)
+    for step_idx in range(max_steps):
+        prompt = build_prompt(obs, max_elems, strict_action_prompt=strict_action_prompt)
         output = model.generate(prompt, steer=steer, max_new_tokens=max_new_tokens)
         action = str(output or "").strip()
 
@@ -583,6 +1000,16 @@ def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
         success = success or (reward > 0)
         errors.append(error_text)
 
+        cls = classify_action_step(action, error_text)
+        cls.update(
+            {
+                "step_idx": step_idx,
+                "error": error_text,
+                "action": action,
+            }
+        )
+        step_analysis.append(cls)
+
         if done:
             break
 
@@ -592,6 +1019,35 @@ def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
             last_error = err
             break
 
+    syntax_error_steps = sum(
+        1 for entry in step_analysis if not bool(entry.get("syntax_ok", True))
+    )
+    action_type_error_steps = sum(
+        1
+        for entry in step_analysis
+        if bool(entry.get("action_type_known", True))
+        and (not bool(entry.get("action_type_ok", True)))
+    )
+    bid_grounding_error_steps = sum(
+        1
+        for entry in step_analysis
+        if bool(entry.get("bid_grounding_known", True))
+        and (not bool(entry.get("bid_grounding_ok", True)))
+    )
+    action_type_unknown_steps = sum(
+        1 for entry in step_analysis if not bool(entry.get("action_type_known", True))
+    )
+    bid_grounding_unknown_steps = sum(
+        1 for entry in step_analysis if not bool(entry.get("bid_grounding_known", True))
+    )
+
+    correction_events = 0
+    for idx in range(1, len(step_analysis)):
+        prev_err = bool(step_analysis[idx - 1].get("error"))
+        cur_err = bool(step_analysis[idx].get("error"))
+        if prev_err and (not cur_err):
+            correction_events += 1
+
     return {
         "outputs": outputs,
         "actions": actions,
@@ -599,6 +1055,16 @@ def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
         "total_reward": total_reward,
         "success": bool(success),
         "error": last_error,
+        "step_analysis": step_analysis,
+        "syntax_error_steps": syntax_error_steps,
+        "action_type_error_steps": action_type_error_steps,
+        "bid_grounding_error_steps": bid_grounding_error_steps,
+        "action_type_unknown_steps": action_type_unknown_steps,
+        "bid_grounding_unknown_steps": bid_grounding_unknown_steps,
+        "syntax_error_episode": bool(syntax_error_steps > 0),
+        "action_type_error_episode": bool(action_type_error_steps > 0),
+        "bid_grounding_error_episode": bool(bid_grounding_error_steps > 0),
+        "correction_events": correction_events,
     }
 
 
@@ -607,11 +1073,11 @@ def _run_episode(env, model, seed, max_steps, max_elems, max_new_tokens, steer):
 # =============================================================================
 
 
-def _get_prompt(model, obs, env, max_elems):
+def _get_prompt(model, obs, env, max_elems, strict_action_prompt=False):
     """Build text prompt for steering vector construction."""
     _ = env
     _ = model
-    prompt = build_prompt(obs, max_elems)
+    prompt = build_prompt(obs, max_elems, strict_action_prompt=strict_action_prompt)
     return prompt
 
 
@@ -669,6 +1135,10 @@ def compute_vector(
     cache_dir="vectors",
     model_alias=None,
     seed=0,
+    quiet=False,
+    show_progress=True,
+    strict_action_prompt=False,
+    cache_spec=None,
 ):
     """Compute steering vectors for all layers from contrastive prompts.
 
@@ -686,37 +1156,81 @@ def compute_vector(
         seed: Random seed for cache path
     """
 
+    if steps <= 0:
+        raise ValueError("steps must be > 0")
+    if not tasks:
+        raise ValueError("tasks must not be empty")
+
     rng = random.Random(seed)
+    ordered_tasks = list(tasks)
+    rng.shuffle(ordered_tasks)
+    envs = {}
+
+    def get_env(task_name):
+        env = envs.get(task_name)
+        if env is None:
+            env = make_miniwob_env(task_name)
+            envs[task_name] = env
+        return env
+
+    def iter_task_stream():
+        task_count = len(ordered_tasks)
+        for sample_idx in range(steps):
+            if sample_idx > 0 and sample_idx % task_count == 0:
+                rng.shuffle(ordered_tasks)
+            task_name = ordered_tasks[sample_idx % task_count]
+            yield sample_idx, task_name
+
+    if cache_spec is None and cache_dir and model_alias is not None:
+        cache_spec = build_vector_cache_spec(
+            cache_dir=cache_dir,
+            model_alias=model_alias,
+            seed=seed,
+            prompt_type=prompt_type,
+            vector_method=model.vector_method,
+            train_steps=steps,
+            max_elems=max_elems,
+            max_new_tokens=max_new_tokens,
+            strict_action_prompt=strict_action_prompt,
+            tasks=tasks,
+        )
 
     if prompt_type == "combined":
-        print(
-            "Computing Combined Vector for all layers (format_accuracy + composite_1)..."
+        if not quiet:
+            print(
+                "Computing Combined Vector for all layers (format_accuracy + composite_1)..."
+            )
+        vec_a_sums = {}
+        vec_b_sums = {}
+        pbar = tqdm(
+            total=steps,
+            desc="Computing combined vectors",
+            disable=not show_progress,
         )
-        vec_a_sums = {}  # layer_idx -> accumulated vector A
-        vec_b_sums = {}  # layer_idx -> accumulated vector B
-
-        pbar = tqdm(total=steps, desc="Computing combined vectors")
-        steps_per_task = max(1, steps // len(tasks))
-
-        for task in tasks:
-            env = make_miniwob_env(task)
-            for _ in range(steps_per_task):
-                seed_val = rng.randint(0, 2**31 - 1)
+        try:
+            for sample_idx, task in iter_task_stream():
+                env = get_env(task)
+                seed_val = derive_episode_seed(
+                    seed, "vector_combined", task, sample_idx
+                )
                 obs, _ = env.reset(seed=seed_val)
 
-                base_prompt = _get_prompt(model, obs, env, max_elems)
+                base_prompt = _get_prompt(
+                    model,
+                    obs,
+                    env,
+                    max_elems,
+                    strict_action_prompt=strict_action_prompt,
+                )
 
-                # Vector A: format_accuracy
                 pos_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['pos']}"
                 neg_a = f"{base_prompt}\n{PROMPT_CONFIGS['format_accuracy']['neg']}"
                 diffs_a = _compute_activation_diff(model, pos_a, neg_a, max_new_tokens)
 
-                # Vector B: composite_1
                 pos_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['pos']}"
                 neg_b = f"{base_prompt}\n{PROMPT_CONFIGS['composite_1']['neg']}"
                 diffs_b = _compute_activation_diff(model, pos_b, neg_b, max_new_tokens)
 
-                # Accumulate for each layer
                 for layer_idx in diffs_a.keys():
                     if layer_idx not in vec_a_sums:
                         vec_a_sums[layer_idx] = diffs_a[layer_idx]
@@ -724,107 +1238,84 @@ def compute_vector(
                     else:
                         vec_a_sums[layer_idx] += diffs_a[layer_idx]
                         vec_b_sums[layer_idx] += diffs_b[layer_idx]
-
                 pbar.update(1)
-                if pbar.n >= steps:
-                    break
-            env.close()
-            if pbar.n >= steps:
-                break
-        pbar.close()
+        finally:
+            pbar.close()
+            for env in envs.values():
+                env.close()
 
-        # Normalize and combine for each layer
         all_vectors = {}
         for layer_idx in vec_a_sums.keys():
-            vec_a = vec_a_sums[layer_idx] / max(1, pbar.n)
-            vec_b = vec_b_sums[layer_idx] / max(1, pbar.n)
-
+            vec_a = vec_a_sums[layer_idx] / float(steps)
+            vec_b = vec_b_sums[layer_idx] / float(steps)
             norm_a = np.linalg.norm(vec_a)
             norm_b = np.linalg.norm(vec_b)
             if norm_a > 0:
                 vec_a = vec_a / norm_a
             if norm_b > 0:
                 vec_b = vec_b / norm_b
-
             combined = vec_a + vec_b
             norm_c = np.linalg.norm(combined)
             if norm_c > 0:
                 combined = combined / norm_c
             all_vectors[layer_idx] = combined
+    else:
+        totals = {}
+        pos_instr = PROMPT_CONFIGS[prompt_type]["pos"]
+        neg_instr = PROMPT_CONFIGS[prompt_type]["neg"]
 
-        # Save all vectors to cache
-        if cache_dir and model_alias is not None:
-            cache_subdir = os.path.join(cache_dir, model_alias, f"seed_{seed}")
-            os.makedirs(cache_subdir, exist_ok=True)
-            for layer_idx, vec in all_vectors.items():
-                cache_path = os.path.join(
-                    cache_subdir, f"{prompt_type}_L{layer_idx}.pt"
+        pbar = tqdm(
+            total=steps,
+            desc="Computing steering vectors for all layers",
+            disable=not show_progress,
+        )
+        try:
+            for sample_idx, task in iter_task_stream():
+                env = get_env(task)
+                seed_val = derive_episode_seed(seed, "vector_single", task, sample_idx)
+                obs, _ = env.reset(seed=seed_val)
+
+                base_prompt = _get_prompt(
+                    model,
+                    obs,
+                    env,
+                    max_elems,
+                    strict_action_prompt=strict_action_prompt,
                 )
-                torch.save(
-                    torch.tensor(vec, dtype=torch.float32, device="cpu"), cache_path
-                )
-            print(f">>> Saved {len(all_vectors)} vectors to {cache_subdir}")
+                pos = f"{base_prompt}\n{pos_instr}"
+                neg = f"{base_prompt}\n{neg_instr}"
+                diffs = _compute_activation_diff(model, pos, neg, max_new_tokens)
 
-        # Set all vectors in model
-        model.set_vector(all_vectors)
-        return
+                for layer_idx, diff in diffs.items():
+                    if layer_idx not in totals:
+                        totals[layer_idx] = diff
+                    else:
+                        totals[layer_idx] += diff
+                pbar.update(1)
+        finally:
+            pbar.close()
+            for env in envs.values():
+                env.close()
 
-    # Standard single-prompt logic
-    totals = {}  # layer_idx -> accumulated difference
-    pos_instr = PROMPT_CONFIGS[prompt_type]["pos"]
-    neg_instr = PROMPT_CONFIGS[prompt_type]["neg"]
+        all_vectors = {}
+        for layer_idx, total in totals.items():
+            vec = total / float(steps)
+            norm = np.linalg.norm(vec)
+            if norm > 0:
+                vec = vec / norm
+            all_vectors[layer_idx] = vec
 
-    pbar = tqdm(total=steps, desc="Computing steering vectors for all layers")
-    steps_per_task = max(1, steps // len(tasks))
-
-    for task in tasks:
-        env = gym.make(f"browsergym/miniwob.{task}")
-        for _ in range(steps_per_task):
-            seed_val = rng.randint(0, 2**31 - 1)
-            obs, _ = env.reset(seed=seed_val)
-
-            base_prompt = _get_prompt(model, obs, env, max_elems)
-            pos = f"{base_prompt}\n{pos_instr}"
-            neg = f"{base_prompt}\n{neg_instr}"
-
-            # Compute activation difference for all layers
-            diffs = _compute_activation_diff(model, pos, neg, max_new_tokens)
-
-            # Accumulate for each layer
-            for layer_idx, diff in diffs.items():
-                if layer_idx not in totals:
-                    totals[layer_idx] = diff
-                else:
-                    totals[layer_idx] += diff
-
-            pbar.update(1)
-
-            if pbar.n >= steps:
-                break
-        env.close()
-        if pbar.n >= steps:
-            break
-    pbar.close()
-
-    # Normalize each layer's vector
-    all_vectors = {}
-    for layer_idx, total in totals.items():
-        vec = total / max(1, pbar.n)
-        norm = np.linalg.norm(vec)
-        if norm > 0:
-            vec = vec / norm
-        all_vectors[layer_idx] = vec
-
-    # Save all vectors to cache
-    if cache_dir and model_alias is not None:
-        cache_subdir = os.path.join(cache_dir, model_alias, f"seed_{seed}")
-        os.makedirs(cache_subdir, exist_ok=True)
+    if cache_spec is not None:
+        write_vector_cache_metadata(cache_spec)
         for layer_idx, vec in all_vectors.items():
-            cache_path = os.path.join(cache_subdir, f"{prompt_type}_L{layer_idx}.pt")
+            cache_path = vector_cache_file(cache_spec, layer_idx)
             torch.save(torch.tensor(vec, dtype=torch.float32, device="cpu"), cache_path)
-        print(f">>> Saved {len(all_vectors)} vectors to {cache_subdir}")
+        if not quiet:
+            print(
+                f">>> Saved {len(all_vectors)} vectors to {cache_spec['subdir']}"
+                f" (hash={cache_spec['config_hash']})"
+            )
 
-    # Set all vectors in model
     model.set_vector(all_vectors)
 
 
@@ -847,13 +1338,127 @@ def load_base_jsonl(path):
             if task is None or seed is None:
                 continue
             base_records[(task, int(seed))] = record
-    return base_records
+
+    manifest = None
+    manifest_path = f"{path}.meta.json"
+    if os.path.exists(manifest_path):
+        with open(manifest_path, "r", encoding="utf-8") as f:
+            manifest = json.load(f)
+            if isinstance(manifest, dict):
+                manifest["_manifest_path"] = manifest_path
+
+    return base_records, manifest
+
+
+def _canonical_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        val = value.strip().lower()
+        if val in {"1", "true", "yes", "y"}:
+            return True
+        if val in {"0", "false", "no", "n"}:
+            return False
+    return value
+
+
+def _canonical_int(value):
+    try:
+        return int(value)
+    except Exception:
+        return value
+
+
+def _check_equal(mismatches, field, expected, actual):
+    if expected != actual:
+        mismatches.append(f"{field}: expected={expected!r}, baseline={actual!r}")
+
+
+def validate_steer_only_compatibility(
+    base_manifest,
+    run_metadata,
+    tasks,
+    eval_seed,
+    episode_steps,
+    max_elems,
+    max_new_tokens,
+    strict_action_prompt,
+):
+    if not isinstance(base_manifest, dict):
+        raise ValueError(
+            "Missing baseline manifest for steer-only mode: expected "
+            "'<base_jsonl>.meta.json' with run metadata."
+        )
+
+    mismatches = []
+    task_hash = _task_list_hash(tasks)
+
+    _check_equal(mismatches, "task_hash", task_hash, base_manifest.get("task_hash"))
+    _check_equal(
+        mismatches,
+        "task_count",
+        len(tasks),
+        _canonical_int(base_manifest.get("task_count")),
+    )
+    _check_equal(
+        mismatches,
+        "eval_seed",
+        int(eval_seed),
+        _canonical_int(base_manifest.get("eval_seed")),
+    )
+    _check_equal(
+        mismatches,
+        "episode_steps_per_task",
+        3,
+        _canonical_int(base_manifest.get("episode_steps_per_task")),
+    )
+
+    base_run = base_manifest.get("run_metadata") or {}
+    expected = {
+        "model_alias": (run_metadata or {}).get("model_alias"),
+        "model_name": (run_metadata or {}).get("model_name"),
+        "seed": int(eval_seed),
+        "episode_steps": int(episode_steps),
+        "max_elems": int(max_elems),
+        "max_new_tokens": int(max_new_tokens),
+        "strict_action_prompt": bool(strict_action_prompt),
+    }
+
+    optional_fields = ("prompt_type", "vector_method")
+    for field in optional_fields:
+        val = (run_metadata or {}).get(field)
+        if val is not None:
+            expected[field] = val
+
+    for field, exp in expected.items():
+        got = base_run.get(field)
+        got = _canonical_int(_canonical_bool(got))
+        exp = _canonical_int(_canonical_bool(exp))
+        _check_equal(mismatches, f"run_metadata.{field}", exp, got)
+
+    current_sha = _git_sha()
+    baseline_sha = str(base_manifest.get("git_sha") or "")
+    if baseline_sha and current_sha != "unknown":
+        _check_equal(mismatches, "git_sha", current_sha, baseline_sha)
+
+    if mismatches:
+        details = "\n".join(f"- {x}" for x in mismatches)
+        source = (run_metadata or {}).get("base_jsonl") or "<base_jsonl>"
+        manifest_path = base_manifest.get("_manifest_path") or f"{source}.meta.json"
+        raise ValueError(
+            "Incompatible baseline for steer-only mode.\n"
+            f"Baseline JSONL: {source}\n"
+            f"Baseline manifest: {manifest_path}\n"
+            "Mismatches:\n"
+            f"{details}"
+        )
 
 
 def evaluate(
     model,
     tasks,
-    steps,
     max_elems,
     max_new_tokens,
     out_path,
@@ -861,35 +1466,75 @@ def evaluate(
     steer_only=False,
     eval_seed=0,
     base_records=None,
+    base_manifest=None,
     episode_steps=10,
+    quiet=False,
+    show_progress=True,
+    strict_action_prompt=False,
+    run_metadata=None,
 ):
     """Evaluate model on tasks, comparing baseline vs steered."""
     if base_only and steer_only:
         raise ValueError("Cannot set both base_only and steer_only")
     if steer_only and base_records is None:
         raise ValueError("steer_only requires base_records")
+    if steer_only:
+        validate_steer_only_compatibility(
+            base_manifest=base_manifest,
+            run_metadata=run_metadata,
+            tasks=tasks,
+            eval_seed=eval_seed,
+            episode_steps=episode_steps,
+            max_elems=max_elems,
+            max_new_tokens=max_new_tokens,
+            strict_action_prompt=strict_action_prompt,
+        )
 
     base_hits = 0
     steer_hits = 0
     error_episodes_base = 0
     error_episodes_steer = 0
-    total = 0
     base_total = 0
+    steer_total = 0
+
+    base_action_type_error_episodes = 0
+    base_bid_grounding_error_episodes = 0
+    base_syntax_error_episodes = 0
+    steer_action_type_error_episodes = 0
+    steer_bid_grounding_error_episodes = 0
+    steer_syntax_error_episodes = 0
+
+    base_action_type_error_steps = 0
+    base_bid_grounding_error_steps = 0
+    base_syntax_error_steps = 0
+    steer_action_type_error_steps = 0
+    steer_bid_grounding_error_steps = 0
+    steer_syntax_error_steps = 0
+    base_action_type_unknown_steps = 0
+    base_bid_grounding_unknown_steps = 0
+    steer_action_type_unknown_steps = 0
+    steer_bid_grounding_unknown_steps = 0
+
+    base_steps_total = 0
+    steer_steps_total = 0
+    base_correction_events = 0
+    steer_correction_events = 0
 
     # Three-episodes-per-task evaluation for fairness and consistency
     steps_per_task = 3
     target_episodes = len(tasks) * steps_per_task
-    pbar = tqdm(total=target_episodes, desc="Evaluating")
+    pbar = tqdm(total=target_episodes, desc="Evaluating", disable=not show_progress)
 
-    seed_rng = random.Random(eval_seed)
+    episode_seed_trace = []
 
     with open(out_path, "w", encoding="utf-8") as f:
         for task in tasks:
             env = make_miniwob_env(task)
-            for _ in range(steps_per_task):
-                seed = seed_rng.randint(0, 2**31 - 1)
-                obs, _ = env.reset(seed=seed)
-
+            for episode_idx in range(steps_per_task):
+                seed = derive_episode_seed(eval_seed, "eval", task, episode_idx)
+                episode_seed_trace.append(
+                    {"task": task, "episode_idx": episode_idx, "seed": seed}
+                )
                 record = {"task": task, "seed": seed}
                 base_success = None
 
@@ -905,6 +1550,36 @@ def evaluate(
                     base_success = base_record.get("base_success")
                     base_error = str(base_record.get("base_error", "") or "")
                     base_failed = bool(base_error)
+                    base_steps = int(base_record.get("base_steps", 0) or 0)
+
+                    base_action_type_err_episode = bool(
+                        base_record.get("base_action_type_error_episode", False)
+                    )
+                    base_bid_grounding_err_episode = bool(
+                        base_record.get("base_bid_grounding_error_episode", False)
+                    )
+                    base_syntax_err_episode = bool(
+                        base_record.get("base_syntax_error_episode", False)
+                    )
+
+                    base_action_type_err_steps = int(
+                        base_record.get("base_action_type_error_steps", 0) or 0
+                    )
+                    base_bid_grounding_err_steps = int(
+                        base_record.get("base_bid_grounding_error_steps", 0) or 0
+                    )
+                    base_syntax_err_steps = int(
+                        base_record.get("base_syntax_error_steps", 0) or 0
+                    )
+                    base_action_type_unknown = int(
+                        base_record.get("base_action_type_unknown_steps", 0) or 0
+                    )
+                    base_bid_grounding_unknown = int(
+                        base_record.get("base_bid_grounding_unknown_steps", 0) or 0
+                    )
+                    base_correction = int(
+                        base_record.get("base_correction_events", 0) or 0
+                    )
 
                     record.update(
                         {
@@ -912,11 +1587,23 @@ def evaluate(
                             "base_outputs": base_record.get("base_outputs", []),
                             "base_action": base_action,
                             "base_actions": base_record.get("base_actions", []),
-                            "base_steps": base_record.get("base_steps"),
+                            "base_steps": base_steps,
                             "base_total_reward": base_record.get("base_total_reward"),
                             "base_success": base_success,
                             "base_error": base_error,
                             "base_error_episode": bool(base_failed),
+                            "base_action_type_error_episode": base_action_type_err_episode,
+                            "base_bid_grounding_error_episode": base_bid_grounding_err_episode,
+                            "base_syntax_error_episode": base_syntax_err_episode,
+                            "base_action_type_error_steps": base_action_type_err_steps,
+                            "base_bid_grounding_error_steps": base_bid_grounding_err_steps,
+                            "base_syntax_error_steps": base_syntax_err_steps,
+                            "base_action_type_unknown_steps": base_action_type_unknown,
+                            "base_bid_grounding_unknown_steps": base_bid_grounding_unknown,
+                            "base_correction_events": base_correction,
+                            "base_step_analysis": base_record.get(
+                                "base_step_analysis", []
+                            ),
                         }
                     )
                     if base_success is not None:
@@ -924,6 +1611,19 @@ def evaluate(
                         base_total += 1
                     if base_failed:
                         error_episodes_base += 1
+
+                    base_action_type_error_episodes += int(base_action_type_err_episode)
+                    base_bid_grounding_error_episodes += int(
+                        base_bid_grounding_err_episode
+                    )
+                    base_syntax_error_episodes += int(base_syntax_err_episode)
+                    base_action_type_error_steps += base_action_type_err_steps
+                    base_bid_grounding_error_steps += base_bid_grounding_err_steps
+                    base_syntax_error_steps += base_syntax_err_steps
+                    base_action_type_unknown_steps += base_action_type_unknown
+                    base_bid_grounding_unknown_steps += base_bid_grounding_unknown
+                    base_steps_total += base_steps
+                    base_correction_events += base_correction
                 else:
                     base_episode = _run_episode(
                         env,
@@ -933,13 +1633,52 @@ def evaluate(
                         max_elems,
                         max_new_tokens,
                         steer=False,
+                        strict_action_prompt=strict_action_prompt,
                     )
                     base_success = base_episode["success"]
                     base_error = base_episode["error"]
+                    base_steps = int(base_episode["steps"])
+
+                    base_action_type_err_episode = bool(
+                        base_episode["action_type_error_episode"]
+                    )
+                    base_bid_grounding_err_episode = bool(
+                        base_episode["bid_grounding_error_episode"]
+                    )
+                    base_syntax_err_episode = bool(base_episode["syntax_error_episode"])
+
+                    base_action_type_err_steps = int(
+                        base_episode["action_type_error_steps"]
+                    )
+                    base_bid_grounding_err_steps = int(
+                        base_episode["bid_grounding_error_steps"]
+                    )
+                    base_syntax_err_steps = int(base_episode["syntax_error_steps"])
+                    base_action_type_unknown = int(
+                        base_episode.get("action_type_unknown_steps", 0)
+                    )
+                    base_bid_grounding_unknown = int(
+                        base_episode.get("bid_grounding_unknown_steps", 0)
+                    )
+                    base_correction = int(base_episode["correction_events"])
+
                     base_hits += int(base_success)
                     base_total += 1
                     if base_error:
                         error_episodes_base += 1
+
+                    base_action_type_error_episodes += int(base_action_type_err_episode)
+                    base_bid_grounding_error_episodes += int(
+                        base_bid_grounding_err_episode
+                    )
+                    base_syntax_error_episodes += int(base_syntax_err_episode)
+                    base_action_type_error_steps += base_action_type_err_steps
+                    base_bid_grounding_error_steps += base_bid_grounding_err_steps
+                    base_syntax_error_steps += base_syntax_err_steps
+                    base_action_type_unknown_steps += base_action_type_unknown
+                    base_bid_grounding_unknown_steps += base_bid_grounding_unknown
+                    base_steps_total += base_steps
+                    base_correction_events += base_correction
 
                     record.update(
                         {
@@ -951,11 +1690,21 @@ def evaluate(
                             if base_episode["actions"]
                             else "",
                             "base_actions": base_episode["actions"],
-                            "base_steps": base_episode["steps"],
+                            "base_steps": base_steps,
                             "base_total_reward": base_episode["total_reward"],
                             "base_success": base_success,
                             "base_error": base_error,
                             "base_error_episode": bool(base_error),
+                            "base_action_type_error_episode": base_action_type_err_episode,
+                            "base_bid_grounding_error_episode": base_bid_grounding_err_episode,
+                            "base_syntax_error_episode": base_syntax_err_episode,
+                            "base_action_type_error_steps": base_action_type_err_steps,
+                            "base_bid_grounding_error_steps": base_bid_grounding_err_steps,
+                            "base_syntax_error_steps": base_syntax_err_steps,
+                            "base_action_type_unknown_steps": base_action_type_unknown,
+                            "base_bid_grounding_unknown_steps": base_bid_grounding_unknown,
+                            "base_correction_events": base_correction,
+                            "base_step_analysis": base_episode["step_analysis"],
                         }
                     )
 
@@ -968,12 +1717,56 @@ def evaluate(
                         max_elems,
                         max_new_tokens,
                         steer=True,
+                        strict_action_prompt=strict_action_prompt,
                     )
                     steer_success = steer_episode["success"]
                     steer_error = steer_episode["error"]
+
+                    steer_steps = int(steer_episode["steps"])
+                    steer_action_type_err_episode = bool(
+                        steer_episode["action_type_error_episode"]
+                    )
+                    steer_bid_grounding_err_episode = bool(
+                        steer_episode["bid_grounding_error_episode"]
+                    )
+                    steer_syntax_err_episode = bool(
+                        steer_episode["syntax_error_episode"]
+                    )
+
+                    steer_action_type_err_steps = int(
+                        steer_episode["action_type_error_steps"]
+                    )
+                    steer_bid_grounding_err_steps = int(
+                        steer_episode["bid_grounding_error_steps"]
+                    )
+                    steer_syntax_err_steps = int(steer_episode["syntax_error_steps"])
+                    steer_action_type_unknown = int(
+                        steer_episode.get("action_type_unknown_steps", 0)
+                    )
+                    steer_bid_grounding_unknown = int(
+                        steer_episode.get("bid_grounding_unknown_steps", 0)
+                    )
+                    steer_correction = int(steer_episode["correction_events"])
+
                     steer_hits += int(steer_success)
+                    steer_total += 1
                     if steer_error:
                         error_episodes_steer += 1
+
+                    steer_action_type_error_episodes += int(
+                        steer_action_type_err_episode
+                    )
+                    steer_bid_grounding_error_episodes += int(
+                        steer_bid_grounding_err_episode
+                    )
+                    steer_syntax_error_episodes += int(steer_syntax_err_episode)
+                    steer_action_type_error_steps += steer_action_type_err_steps
+                    steer_bid_grounding_error_steps += steer_bid_grounding_err_steps
+                    steer_syntax_error_steps += steer_syntax_err_steps
+                    steer_action_type_unknown_steps += steer_action_type_unknown
+                    steer_bid_grounding_unknown_steps += steer_bid_grounding_unknown
+                    steer_steps_total += steer_steps
+                    steer_correction_events += steer_correction
 
                     record.update(
                         {
@@ -985,49 +1778,136 @@ def evaluate(
                             if steer_episode["actions"]
                             else "",
                             "steer_actions": steer_episode["actions"],
-                            "steer_steps": steer_episode["steps"],
+                            "steer_steps": steer_steps,
                             "steer_total_reward": steer_episode["total_reward"],
                             "steer_success": steer_success,
                             "steer_error": steer_error,
                             "steer_error_episode": bool(steer_error),
+                            "steer_action_type_error_episode": steer_action_type_err_episode,
+                            "steer_bid_grounding_error_episode": steer_bid_grounding_err_episode,
+                            "steer_syntax_error_episode": steer_syntax_err_episode,
+                            "steer_action_type_error_steps": steer_action_type_err_steps,
+                            "steer_bid_grounding_error_steps": steer_bid_grounding_err_steps,
+                            "steer_syntax_error_steps": steer_syntax_err_steps,
+                            "steer_action_type_unknown_steps": steer_action_type_unknown,
+                            "steer_bid_grounding_unknown_steps": steer_bid_grounding_unknown,
+                            "steer_correction_events": steer_correction,
+                            "steer_step_analysis": steer_episode["step_analysis"],
                         }
                     )
 
+                record.update(
+                    {
+                        "strict_action_prompt": bool(strict_action_prompt),
+                        "max_elems": int(max_elems),
+                        "max_new_tokens": int(max_new_tokens),
+                    }
+                )
+
                 f.write(json.dumps(record) + "\n")
-                total += 1
                 pbar.update(1)
 
-                if base_only:
-                    pbar.set_postfix(acc=f"{base_hits / max(1, base_total):.1%}")
-                else:
-                    base_acc = base_hits / max(1, base_total)
-                    steer_acc = steer_hits / max(1, total)
-                    pbar.set_postfix(
-                        base=f"{base_acc:.1%}",
-                        steer=f"{steer_acc:.1%}",
-                        delta=f"{(steer_acc - base_acc):+.1%}",
-                    )
+                if show_progress and (not quiet):
+                    if base_only:
+                        pbar.set_postfix(acc=f"{base_hits / max(1, base_total):.1%}")
+                    else:
+                        base_acc = base_hits / max(1, base_total)
+                        steer_acc = steer_hits / max(1, steer_total)
+                        pbar.set_postfix(
+                            base=f"{base_acc:.1%}",
+                            steer=f"{steer_acc:.1%}",
+                            delta=f"{(steer_acc - base_acc):+.1%}",
+                        )
 
-                if pbar.n >= target_episodes:
-                    break
             env.close()
-            if pbar.n >= target_episodes:
-                break
     pbar.close()
 
     base_acc = base_hits / max(1, base_total)
-    steer_acc = steer_hits / max(1, total) if not base_only else 0
+    steer_acc = steer_hits / max(1, steer_total) if not base_only else 0
 
-    return {
+    summary = {
         "base_accuracy": base_acc,
         "steer_accuracy": steer_acc,
         "improvement": steer_acc - base_acc,
         "base_parse_fail": error_episodes_base / max(1, base_total),
-        "steer_parse_fail": error_episodes_steer / max(1, total)
+        "steer_parse_fail": error_episodes_steer / max(1, steer_total)
         if not base_only
         else 0,
-        "total_episodes": total,
+        "total_episodes": len(tasks) * steps_per_task,
+        "base_total_episodes": base_total,
+        "steer_total_episodes": steer_total,
+        "base_action_type_error_episode_rate": base_action_type_error_episodes
+        / max(1, base_total),
+        "base_bid_grounding_error_episode_rate": base_bid_grounding_error_episodes
+        / max(1, base_total),
+        "base_syntax_error_episode_rate": base_syntax_error_episodes
+        / max(1, base_total),
+        "base_action_type_error_step_rate": base_action_type_error_steps
+        / max(1, base_steps_total),
+        "base_bid_grounding_error_step_rate": base_bid_grounding_error_steps
+        / max(1, base_steps_total),
+        "base_syntax_error_step_rate": base_syntax_error_steps
+        / max(1, base_steps_total),
+        "base_action_type_unknown_step_rate": base_action_type_unknown_steps
+        / max(1, base_steps_total),
+        "base_bid_grounding_unknown_step_rate": base_bid_grounding_unknown_steps
+        / max(1, base_steps_total),
+        "base_correction_events_per_episode": base_correction_events
+        / max(1, base_total),
+        "steer_action_type_error_episode_rate": steer_action_type_error_episodes
+        / max(1, steer_total)
+        if not base_only
+        else 0,
+        "steer_bid_grounding_error_episode_rate": steer_bid_grounding_error_episodes
+        / max(1, steer_total)
+        if not base_only
+        else 0,
+        "steer_syntax_error_episode_rate": steer_syntax_error_episodes
+        / max(1, steer_total)
+        if not base_only
+        else 0,
+        "steer_action_type_error_step_rate": steer_action_type_error_steps
+        / max(1, steer_steps_total)
+        if not base_only
+        else 0,
+        "steer_bid_grounding_error_step_rate": steer_bid_grounding_error_steps
+        / max(1, steer_steps_total)
+        if not base_only
+        else 0,
+        "steer_syntax_error_step_rate": steer_syntax_error_steps
+        / max(1, steer_steps_total)
+        if not base_only
+        else 0,
+        "steer_action_type_unknown_step_rate": steer_action_type_unknown_steps
+        / max(1, steer_steps_total)
+        if not base_only
+        else 0,
+        "steer_bid_grounding_unknown_step_rate": steer_bid_grounding_unknown_steps
+        / max(1, steer_steps_total)
+        if not base_only
+        else 0,
+        "steer_correction_events_per_episode": steer_correction_events
+        / max(1, steer_total)
+        if not base_only
+        else 0,
     }
+
+    manifest = {
+        "generated_at_utc": _utc_now_iso(),
+        "git_sha": _git_sha(),
+        "output_jsonl": out_path,
+        "run_metadata": run_metadata or {},
+        "summary": summary,
+        "task_count": len(tasks),
+        "task_hash": _task_list_hash(tasks),
+        "tasks": list(tasks),
+        "eval_seed": int(eval_seed),
+        "episode_steps_per_task": int(steps_per_task),
+        "episode_seed_trace": episode_seed_trace,
+    }
+    write_run_manifest(out_path, manifest)
+
+    return summary
 
 
 # =============================================================================
@@ -1048,12 +1928,28 @@ def main():
         default="accuracy",
     )
     parser.add_argument(
-        "--vector-method", choices=["response", "prompt"], default="response"
+        "--vector-method", choices=["response", "prompt"], default="prompt"
     )
     parser.add_argument("--train-steps", type=int, default=200)
-    parser.add_argument("--eval-steps", type=int, default=400)
     parser.add_argument("--episode-steps", type=int, default=10)
+    parser.add_argument(
+        "--max-elems",
+        type=int,
+        default=80,
+        help="Max DOM/AXTree lines to include in prompt sections",
+    )
+    parser.add_argument(
+        "--max-new-tokens",
+        type=int,
+        default=80,
+        help="Max generation tokens for action output",
+    )
     parser.add_argument("--tasks", default="all", help="Task list or 'all'")
+    parser.add_argument(
+        "--task-manifest",
+        default="runtime_state/miniwob_task_manifest.json",
+        help="Path to frozen task manifest JSON",
+    )
     parser.add_argument("--out", default="results.jsonl")
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
@@ -1082,7 +1978,28 @@ def main():
         action="store_true",
         help="Force recomputation of steering vector",
     )
+    parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Suppress non-essential logs/progress",
+    )
+    parser.add_argument(
+        "--no-progress",
+        action="store_true",
+        help="Disable tqdm progress bars",
+    )
+    parser.add_argument(
+        "--strict-action-prompt",
+        action="store_true",
+        help="Use strict action-only prompt suffix (less verbose outputs)",
+    )
     args = parser.parse_args()
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+    os.environ.setdefault("TRANSFORMERS_NO_ADVISORY_WARNINGS", "1")
+    hf_logging.set_verbosity_error()
+    warnings.filterwarnings("ignore", category=UserWarning, module="transformers")
+    show_progress = not args.no_progress and not args.quiet
 
     # Resolve layer
     layer_idx = get_layer(args.model, args.layer)
@@ -1095,26 +2012,25 @@ def main():
     # BrowserGym environments are registered automatically when importing browsergym.miniwob
     # No need for gym.register_envs() like with miniwob package
 
-    # Select tasks
-    if args.tasks == "all":
-        tasks = list_miniwob_tasks()
-    else:
-        tasks = [t.strip() for t in args.tasks.split(",")]
+    # Select tasks (frozen via manifest by default)
+    tasks = resolve_tasks(args.tasks, task_manifest_path=args.task_manifest)
 
     if args.base_only and args.steer_only:
         raise ValueError("Cannot set both --base-only and --steer-only")
 
     base_records = None
+    base_manifest = None
     if args.steer_only:
         if not args.base_jsonl:
             raise ValueError("--steer-only requires --base-jsonl")
-        base_records = load_base_jsonl(args.base_jsonl)
+        base_records, base_manifest = load_base_jsonl(args.base_jsonl)
 
     # Initialize model
-    print(f"Model: {args.model} ({MODEL_MAP[args.model]})")
-    print(f"Layer: {layer_idx} ({'auto' if args.layer == 'auto' else 'manual'})")
-    print(f"Coeff: {args.coeff}")
-    print(f"Prompt type: {args.prompt_type}, Vector method: {args.vector_method}")
+    if not args.quiet:
+        print(f"Model: {args.model} ({MODEL_MAP[args.model]})")
+        print(f"Layer: {layer_idx} ({'auto' if args.layer == 'auto' else 'manual'})")
+        print(f"Coeff: {args.coeff}")
+        print(f"Prompt type: {args.prompt_type}, Vector method: {args.vector_method}")
     model = SteeredModel(
         MODEL_MAP[args.model],
         layer_idx=layer_idx,
@@ -1125,34 +2041,50 @@ def main():
     )
 
     # Compute or load steering vector
+    cache_spec = None
     if not args.base_only:
-        # Construct cache path for the target layer
-        cache_subdir = os.path.join(args.cache_dir, args.model, f"seed_{args.seed}")
-        cache_path = os.path.join(cache_subdir, f"{args.prompt_type}_L{layer_idx}.pt")
+        cache_spec = build_vector_cache_spec(
+            cache_dir=args.cache_dir,
+            model_alias=args.model,
+            seed=args.seed,
+            prompt_type=args.prompt_type,
+            vector_method=args.vector_method,
+            train_steps=args.train_steps,
+            max_elems=args.max_elems,
+            max_new_tokens=args.max_new_tokens,
+            strict_action_prompt=args.strict_action_prompt,
+            tasks=tasks,
+        )
+        cache_path = vector_cache_file(cache_spec, layer_idx)
+        cache_valid = validate_vector_cache_metadata(cache_spec)
 
-        # Check if target layer vector is cached
-        if os.path.exists(cache_path) and not args.force_recompute:
-            print(f">>> Loading cached vector from {cache_path}")
+        if os.path.exists(cache_path) and cache_valid and (not args.force_recompute):
+            if not args.quiet:
+                print(
+                    f">>> Loading cached vector from {cache_path}"
+                    f" (hash={cache_spec['config_hash']})"
+                )
             cached_vector = torch.load(cache_path, map_location="cpu")
             model.set_vector(cached_vector, layer_idx=layer_idx)
         else:
-            # Cache miss: compute all layers
-            print(
-                f">>> Computing vectors for all layers (cache {'disabled' if args.force_recompute else 'miss'})"
-            )
+            if not args.quiet:
+                reason = "forced" if args.force_recompute else "cache-miss-or-metadata"
+                print(f">>> Computing vectors for all layers ({reason})")
             compute_vector(
                 model,
                 tasks,
                 args.train_steps,
-                80,
-                80,
+                args.max_elems,
+                args.max_new_tokens,
                 args.prompt_type,
                 cache_dir=args.cache_dir,
                 model_alias=args.model,
                 seed=args.seed,
+                quiet=args.quiet,
+                show_progress=show_progress,
+                strict_action_prompt=args.strict_action_prompt,
+                cache_spec=cache_spec,
             )
-            # compute_vector saves all layers and sets model.vectors
-            # Verify the target layer was loaded
             if model.vector is None:
                 raise RuntimeError(f"Failed to load vector for layer {layer_idx}")
 
@@ -1160,29 +2092,64 @@ def main():
     results = evaluate(
         model,
         tasks,
-        args.eval_steps,
-        80,
-        80,
+        args.max_elems,
+        args.max_new_tokens,
         args.out,
         args.base_only,
         args.steer_only,
         eval_seed=args.seed,
         base_records=base_records,
+        base_manifest=base_manifest,
         episode_steps=args.episode_steps,
+        quiet=args.quiet,
+        show_progress=show_progress,
+        strict_action_prompt=args.strict_action_prompt,
+        run_metadata={
+            "entrypoint": "src/miniwob_steer.py",
+            "model_alias": args.model,
+            "model_name": MODEL_MAP[args.model],
+            "layer": int(layer_idx),
+            "coeff": float(args.coeff),
+            "prompt_type": args.prompt_type,
+            "vector_method": args.vector_method,
+            "train_steps": int(args.train_steps),
+            "episode_steps": int(args.episode_steps),
+            "max_elems": int(args.max_elems),
+            "max_new_tokens": int(args.max_new_tokens),
+            "strict_action_prompt": bool(args.strict_action_prompt),
+            "seed": int(args.seed),
+            "task_manifest": args.task_manifest,
+            "base_only": bool(args.base_only),
+            "steer_only": bool(args.steer_only),
+            "base_jsonl": args.base_jsonl,
+            "cache_hash": cache_spec["config_hash"] if cache_spec else None,
+        },
     )
 
     # Print results
-    print("\n" + "=" * 50)
-    print("RESULTS")
-    print("=" * 50)
-    print(f"Baseline Accuracy:  {results['base_accuracy']:.1%}")
-    if not args.base_only:
-        print(f"Steered Accuracy:   {results['steer_accuracy']:.1%}")
-        print(f"Improvement:        {results['improvement']:+.1%}")
-        print(f"Parse Fail (base):  {results['base_parse_fail']:.1%}")
-        print(f"Parse Fail (steer): {results['steer_parse_fail']:.1%}")
-    print(f"Total Episodes:     {results['total_episodes']}")
-    print(f"Output:             {args.out}")
+    if args.quiet:
+        summary = {
+            "base_accuracy": results["base_accuracy"],
+            "steer_accuracy": results["steer_accuracy"],
+            "improvement": results["improvement"],
+            "base_parse_fail": results["base_parse_fail"],
+            "steer_parse_fail": results["steer_parse_fail"],
+            "total_episodes": results["total_episodes"],
+            "output": args.out,
+        }
+        print(json.dumps(summary))
+    else:
+        print("\n" + "=" * 50)
+        print("RESULTS")
+        print("=" * 50)
+        print(f"Baseline Accuracy:  {results['base_accuracy']:.1%}")
+        if not args.base_only:
+            print(f"Steered Accuracy:   {results['steer_accuracy']:.1%}")
+            print(f"Improvement:        {results['improvement']:+.1%}")
+            print(f"Parse Fail (base):  {results['base_parse_fail']:.1%}")
+            print(f"Parse Fail (steer): {results['steer_parse_fail']:.1%}")
+        print(f"Total Episodes:     {results['total_episodes']}")
+        print(f"Output:             {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,92 +1,130 @@
-# Representation Engineering for Web Agents
+# RESEARCH (durable decisions + literature basis)
 
-## Research Objective
+## scope
+- focus: mechanistic interpretability for zero-shot web-agent action competence
+- benchmark: MiniWob (BrowserGym semantics)
+- model cycle: `qwen3-0.6b` -> `qwen3-1.7b` -> `qwen3-4b`
+- deployment constraint: inference-time interventions only
 
-Investigate whether **representation engineering (model steering)** can improve language model performance on web automation tasks in a zero-shot setting. This explores a novel application of steering techniques to goal-directed, multi-step reasoning domains.
+## core decision (2026-02-10)
+- phase-1 decomposition is fixed to:
+  - `A`: action type selection
+  - `G`: BID grounding
+  - `S`: action syntax validity
+- correction/recovery is logged separately, not treated as a core localization axis in phase-1
 
-**Primary Question**: Can we steer LLMs toward more accurate web interaction decisions by manipulating internal representations, without task-specific fine-tuning or examples?
+## claim scope (current)
+- target claim: localizable and causally intervenable mechanisms for `A/G/S`
+- non-claim for now: strong statistical generalization claims across many seeds
+- performance improvement is secondary and accepted only if MI validity remains intact
 
-**Success Criteria**: Achieve measurable improvement (≥5% preferred) in task success rate through steering interventions.
+## method basis by compatibility
 
----
+### strict zero-shot compatible (no training, inference-time analysis/intervention)
+- **Causal tracing / activation patching**
+  - basis: Meng et al., *Locating and Editing Factual Associations in GPT* (NeurIPS 2022); Heimersheim and Nanda, *How to use and interpret activation patching* (arXiv 2024)
+  - use here: localize causal layers/components for `A/G/S` with clean-vs-corrupted trajectory pairs
+  - output: causal effect map by layer/component and factor-specific deltas
 
-## Implementation Updates
+- **Path/head/component ablation and patching**
+  - basis: Wang et al., *Interpretability in the Wild: a Circuit for IOI in GPT-2 small* (ICLR 2023); Conmy et al., *Towards Automated Circuit Discovery for Mechanistic Interpretability* (NeurIPS 2023)
+  - use here: identify minimal mechanism subsets that control action-type, grounding, or syntax behavior
+  - output: candidate mechanism graph + necessity/sufficiency evidence
 
-### Migration to BrowserGym (2025-02-02)
+- **Inference-time activation steering (validated sites only)**
+  - basis: Turner et al., activation addition / activation engineering line (2023)
+  - use here: intervene only on causally validated layers/components for specific factor repairs (`A` or `G` or `S`)
+  - output: factor-specific intervention deltas and side-effect profile
 
-**Migrated from direct MiniWob++ to BrowserGym framework** for improved stability, richer observations, and unified benchmark API.
+- **Constrained action decoding checks**
+  - basis: benchmark-action semantics and parser/runtime constraints from BrowserGym/MiniWob
+  - use here: isolate syntax-validity effects and prevent invalid action serialization from confounding MI interpretation
+  - output: syntax-failure reduction evidence and interaction with `A/G`
 
-**Key Changes:**
-- **Browser Backend**: Playwright (BrowserGym) instead of Selenium (direct MiniWob++)
-- **Element IDs**: `bid` (BrowserGym ID) instead of `ref` (MiniWob++ reference)
-- **Action Format**: String-based actions `click("N")` instead of `ActionTypes.CLICK_ELEMENT`
-- **Observations**: Rich DOM objects with `obs["goal"]` instead of simple `obs["utterance"]`
-- **DOM Processing**: `flatten_dom_to_str()` utility instead of custom `dom_to_html()`
-- **Task Set**: Full MiniWob++ task list from BrowserGym registry (no custom subset)
+### auxiliary analysis (allowed for analysis, not default deployment path)
+- **DAS / interchange interventions**
+  - basis: Geiger et al., *Finding Alignments Between Interpretable Causal Variables and Distributed Neural Representations* (CLeaR 2024)
+  - use here: test whether subspaces align with `A/G/S` variables under counterfactual swaps
+  - output: interchange consistency scores and variable-aligned subspaces
 
-**Dependencies Updated:**
-- `miniwob` → `browsergym-miniwob`
-- Added: `beautifulsoup4`, `lxml` for DOM parsing
-- Playwright browser: `playwright install chromium`
+- **Tuned lens / readout trajectories**
+  - basis: Belrose et al., *Eliciting Latent Predictions from Transformers with the Tuned Lens* (2023)
+  - use here: inspect where in depth action token commitments emerge
+  - output: layerwise latent-prediction trajectory for action decisions
 
-**Research Continuity:**
-- Steering vector computation logic unchanged
-- Same contrastive prompt methodology
-- Model architectures and layer selection unchanged
-- Experimental reproducibility maintained through versioning
+- **Sparse dictionary / SAE feature analysis**
+  - basis: Cunningham et al., *Sparse Autoencoders Find Highly Interpretable Features in Language Models* (ICLR 2024); Braun et al., *Identifying Functionally Important Features with End-to-End Sparse Dictionary Learning* (NeurIPS 2024)
+  - use here: factor-linked feature discovery and causal feature tests
+  - output: feature-level interpretations and intervention candidates
 
----
+- **Causal mediation analysis**
+  - basis: mediation methods literature for pathway decomposition
+  - use here: quantify pathway contributions (instruction->action direct vs DOM-mediated)
+  - output: direct/indirect effect estimates for `A/G/S`-related decisions
 
-## Methodology
+## web-agent literature anchors for decomposition/evaluation
+- Deng et al., *Mind2Web: Towards a Generalist Agent for the Web* (NeurIPS 2023 Spotlight): operation/element/value decomposition supports action-type vs grounding separation
+- Zhou et al., *WebArena: A Realistic Web Environment for Building Autonomous Agents* (ICLR 2024): realistic failure traces and end-task difficulty context
+- BrowserGym ecosystem paper (2024): unified action semantics and evaluation environment context
 
-### Contrastive Activation Addition (CAA)
+## method execution contract (per run)
+- declare target factor: `A` or `G` or `S`
+- declare control: random/size-matched counterpart
+- declare expected falsifier (what result would reject mechanism hypothesis)
+- run baseline pairing with matching `(task, seed)` when using `--steer-only`
+- report:
+  - quant: baseline_success, steer_success, delta, base_parse_fail, steer_parse_fail
+  - factor metrics: target and non-target factor deltas
+  - controls: delta vs random-control run
+  - qual: at least one before/after trajectory with mechanism note
 
-1. **Compute steering vector**: Generate activations for contrastive prompt pairs (positive vs negative behavior), extract the difference vector at target layers
-2. **Intervene at inference**: Add the steering vector (scaled by coefficient α) to activations during generation
-3. **Zero-shot transfer**: The steering vector generalizes to novel inputs without retraining
+## durable decision log
 
-### Experimental Setup
+### Decision: D-2026-02-10-phase1-threeway
+- context: MI-first phase-1 needed a fixed capability decomposition
+- choice: `A/G/S` as core axes; correction tracked separately
+- rationale: directly observable from action strings, DOM binding, and parser/runtime outcomes
+- implications: all interventions and reports must include factor-specific deltas
 
-**Dataset**: MiniWob++ (17 single-step web automation tasks, DOM-based observations)
+### Decision: D-2026-02-10-method-compatibility
+- context: method set had mixed compatibility with strict zero-shot constraints
+- choice: tier0 (strict no-training) is default execution path; tier1 methods are analysis-only unless explicitly promoted
+- rationale: keeps primary loop compliant with zero-shot + inference-time-only policy
+- implications: probes/SAE/DAS/tuned-lens can guide hypotheses but not be silently treated as deployment evidence
 
+## templates
 
-**Contrastive Prompts**:
-- **Positive**: "Before responding, carefully verify that your selected element matches ALL required attributes. Double-check your answer against the task requirements."
-- **Negative**: "Respond immediately with your first instinct. Skip verification and double-checking."
+### run record template
+```
+## Run: <id>
+- date:
+- model:
+- method_family:
+- target_factor: A|G|S
+- heuristic_rationale:
+- paper_inspirations: [title/year/venue]
+- quantitative_ref: [results path(s)]
+- qualitative_examples_ref: [example ids / paths]
+- decision_next:
+```
 
-**Technical Parameters**:
-- Steering vector computation: 200 episodes (train split)
-- Evaluation: 200 episodes (eval split)
-- Intervention layer: 50% of model depth (e.g., L14 for 0.5B models)
-- Coefficient sweep: α ∈ {1.0, 2.0, 3.0, 4.0, 5.0}
+### failure record template
+```
+## Failure: <id>
+- date:
+- hypothesis:
+- method:
+- target_factor:
+- result:
+- failure_reason:
+- update_after_failure:
+```
 
----
-
-
----
-
-## References
-
-**Representation Engineering - Surveys:**
-- Bartoszcze, Ł., et al. (2025). Representation Engineering for Large-Language Models: Survey and Research Challenges. arXiv:2502.17601
-- Wehner, J., et al. (2025). Taxonomy, Opportunities, and Challenges of Representation Engineering for Large Language Models. arXiv:2502.19649
-
-**Representation Engineering - Core Methods:**
-- Zou, A., et al. (2023). Representation Engineering: A Top-Down Approach to AI Transparency. arXiv:2310.01405
-- Turner, A., et al. (2023). Activation Addition: Steering Language Models Without Optimization. arXiv:2308.10248
-- Rimsky, N., et al. (2024). Steering Llama 2 via Contrastive Activation Addition. ACL 2024
-- Li, K., et al. (2023). Inference-Time Intervention: Eliciting Truthful Answers from a Language Model. NeurIPS 2023
-- Todd, E., et al. (2023). Function Vectors in Large Language Models. ICLR 2025
-
-**Web Agents - Benchmarks:**
-- Shi, T., et al. (2017). World of Bits: An Open-Domain Platform for Web-Based Agents. ICML 2017
-- Deng, X., et al. (2023). Mind2Web: Towards a Generalist Agent for the Web. NeurIPS 2023
-- Zhou, S., et al. (2024). WebArena: A Realistic Web Environment for Building Autonomous Agents. ICLR 2024
-
-**Model:**
-- Qwen Team (2024). Qwen2.5: A Party of Foundation Models. arXiv:2412.15115
-
----
-
-*Last Updated: 2026-01-30*
-*Status: **SUCCESS** - Small Model Hypothesis Validated (Qwen 0.5B: +14.2%, Qwen-Coder 0.5B: +7.0%)*
+### insight template
+```
+## Insight: <id>
+- date:
+- evidence_ref:
+- confidence: low|medium|high
+- implication:
+```
