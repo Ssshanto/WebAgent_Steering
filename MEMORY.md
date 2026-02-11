@@ -21,23 +21,20 @@
 - current_target_factor: pending (`A|G|S`)
 
 ## method queue (coverage order)
-- [ ] 0.1 localization: activation patching / causal tracing / attribution scans for `A/G/S`
-- [ ] 0.2 causal validation: head/component/path ablation + necessity/sufficiency checks
-- [ ] 0.3 confound suppression: constrained action decoding + parser/runtime sanity checks
-- [ ] 0.4 gated intervention: targeted inference-time intervention sweeps (validated mechanisms only)
-- [ ] 0.5 controls: paired random-control repeats (>=5) + effect comparison
-- [ ] tier1-a: probes or tuned-lens analysis (analysis-only)
-- [ ] tier1-b: DAS/interchange analysis if counterfactual pairs are available (analysis-only)
-- [ ] tier1-c: SAE/dictionary or mediation analysis only if explicitly approved
+- [ ] 0.1 instrumentation: define hook families/layers and freeze train/val split manifests
+- [ ] 0.2 feature learning: train per-hook SAE dictionaries and pass quality gates
+- [ ] 0.3 causal validation: latent suppression/amplification on val split for target `A/G/S`
+- [ ] 0.4 controls: random-feature/random-direction paired controls (>=5 repeats)
+- [ ] 0.5 confound suppression: strict decoding + parser/runtime checks
 - [ ] cross-method synthesis + decision update in `RESEARCH.md`
 
 ## code-grounded reminders
 - eval uses fixed 3 episodes/task
-- `--steer-only` requires baseline JSONL with matching `(task, seed)`
-- `--base-only` and `--steer-only` cannot both be set
+- preserve paired baseline/intervention evaluation on identical `(task, seed)`
 - parse-fail metric uses non-empty `*_error` per episode
 - default prompt may be verbose unless `--strict-action-prompt`
 - qwen3 path forces `enable_thinking=False` (+ `/no_think` fallback)
+- hard-zero layer ablations and alpha steering sweeps are deprecated as invalid evidence
 
 ## latest results
 - none
@@ -52,9 +49,9 @@
 - none
 
 ## next actions
-- run baseline-first for `qwen3-1.7b` with strict prompt settings
-- run first tier0 causal localization method
-- log run decision + evidence + why-next-method in `RESEARCH.md`
+- implement hook-capture pipeline with frozen train/val manifests
+- train first SAE dictionaries on selected hook families
+- run latent suppression/amplification validation with random controls and log in `RESEARCH.md`
 
 ## canonical dirs
 - `results/`

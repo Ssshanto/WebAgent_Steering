@@ -7,9 +7,11 @@
 ## stack
 - BrowserGym MiniWob
 - HF causal LMs
-- core script: `src/miniwob_steer.py`
-- sweep script: `scripts/run_sweep.py`
-- queue runner: `scripts/run_experiment_queue.py`
+- core script: `src/miniwob_steer.py` (subcommand CLI)
+- modules:
+  - `src/agent_core.py`
+  - `src/eval_core.py`
+  - `src/sae_core.py`
 
 ## setup
 ```bash
@@ -20,30 +22,50 @@ export MINIWOB_URL="http://localhost:8080/miniwob/"
 
 ## quick run
 ```bash
-python src/miniwob_steer.py --model qwen3-1.7b --layer auto --seed 0 --out results/run.jsonl
-```
-
-## low-noise run
-```bash
-python src/miniwob_steer.py --model qwen3-1.7b --quiet --no-progress --strict-action-prompt --out results/run.jsonl
-```
-
-## sweep example
-```bash
-python scripts/run_sweep.py \
+python src/miniwob_steer.py eval \
   --model qwen3-1.7b \
-  --layers 10-14 \
-  --alphas 1.0,2.0,3.0 \
+  --layer auto \
+  --task-manifest runtime_state/sae_val_manifest.json \
   --seed 0 \
-  --out-dir results/qwen3_sweep/qwen3-1.7b \
-  --quiet --no-progress --strict-action-prompt
+  --out results/run.jsonl
+```
+
+## SAE pipeline (limited subset)
+```bash
+python src/miniwob_steer.py split \
+  --tasks click-button,click-color,use-slider \
+  --train-manifest runtime_state/sae_train_manifest.json \
+  --val-manifest runtime_state/sae_val_manifest.json \
+  --seed 0
+
+python src/miniwob_steer.py capture \
+  --model qwen3-1.7b \
+  --layers 10-18 \
+  --task-manifest runtime_state/sae_train_manifest.json \
+  --out runtime_state/sae_capture_train.pt \
+  --seed 0
+
+python src/miniwob_steer.py train-sae \
+  --capture runtime_state/sae_capture_train.pt \
+  --out runtime_state/sae_artifact.pt \
+  --steps 300
+
+python src/miniwob_steer.py validate-sae \
+  --model qwen3-1.7b \
+  --sae-artifact runtime_state/sae_artifact.pt \
+  --val-manifest runtime_state/sae_val_manifest.json \
+  --out-dir results/sae_validation \
+  --top-k 1 \
+  --modes suppress,amplify \
+  --random-controls 5 \
+  --seed 0
 ```
 
 ## invariants
 - benchmark: MiniWob only
 - default candidate/deployment model: `qwen3-1.7b` (`qwen3-0.6b` is probe/exploration only)
 - seed: `0` for baseline/steer comparison
-- baseline-first; steer uses `--steer-only --base-jsonl`
+- baseline-first paired evaluation on identical `(task, seed)`
 - heavy runs serialized unless GPU headroom allows overlap
 - launchers/configs: ephemeral; generate in `runtime_state/` as needed
 
@@ -55,8 +77,8 @@ python scripts/run_sweep.py \
 
 ## outputs
 - run records: JSONL in `results/`
-- vectors/cache: `vectors/`
-- queue/runtime: `runtime_state/`
+- SAE artifacts and captures: `runtime_state/`
+- runtime metadata: `runtime_state/`
 - logs: `logs/`
 - required reporting: quantitative tables + qualitative before/after examples
 

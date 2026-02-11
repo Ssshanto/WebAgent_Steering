@@ -21,7 +21,7 @@
 - candidate/deployment default model: `qwen3-1.7b` (0.6b for probe/exploration only)
 - zero-shot policy: no finetune, LoRA, adapters, in-task labels, or prior GT access
 - allowed interventions: inference-time only in primary loop
-- no early stopping: method-family coverage is required
+- no early stopping: full-layer localization + controls coverage is required
 
 ## runtime
 - primary local workspace: `/home/ssshanto/Documents/WebAgent_Steering`
@@ -34,29 +34,27 @@
 - heavy runs serialized by default
 
 ## code-grounded execution rules
-- baseline first, then steer
-- steer reuse baseline: `--steer-only --base-jsonl`
-- `--base-only` and `--steer-only` are mutually exclusive
-- `--steer-only` requires `--base-jsonl`
+- baseline first, then intervention
+- reuse frozen baseline episodes for paired comparisons under identical `(task, seed)`
 - seed policy for comparisons: `--seed 0`
 - eval episodes: fixed 3/task (`evaluate`)
 - parse-fail metric: non-empty `*_error` episode rate (`base_parse_fail`, `steer_parse_fail`)
-- default prompt can include CoT-style suffix unless `--strict-action-prompt`
-- qwen3 template uses `enable_thinking=False` (+ `/no_think` fallback)
-- action mapping: `HighLevelActionSet(strict=False, multiaction=False)`
+- deprecated as invalid evidence: full-layer hard-zero residual ablation and alpha-sweep steering baselines
 
-## method ladder (autonomous loop)
+## method ladder (single active methodology)
 - stage gate (mandatory): `exploration -> candidate -> deployment`
-- promotion rule: no method is deployable until it passes candidate evidence requirements (paired baseline/steer + controls + factor metrics)=
-- implement these methodologies in new files
-- tier 0 (strict no-training, inference-time, implementation-first):
-  - `0.1 localization`: causal tracing / activation patching / attribution scans to rank candidate layers/components for `A/G/S`
-  - `0.2 causal validation`: necessity/sufficiency checks via ablation + patching/path tests on top candidates
-  - `0.3 confound suppression`: constrained action decoding + parser/runtime sanity checks to isolate syntax artifacts from mechanism claims
-  - `0.4 gated intervention`: inference-time interventions only on validated mechanisms (may include activation steering/addition, but only after 0.2 passes)
-  - each tier-0 rung must define: target factor (`A/G/S`), control, expected falsifier, stop condition, and non-target regression bound
-- tier 1 (auxiliary analysis, optional, non-deployment by default): probes/tuned-lens, DAS/interchange, SAE/dictionary, mediation analysis
-- tier 1 outputs are hypothesis generators only; they must feed back into tier-0 validation before any deployment claim
+- promotion rule: no claim is deployable until it passes paired baseline/intervention, controls, and factor metrics
+- active methodology only:
+  - `0.1 instrumentation`: residual-stream hook capture at fixed hook families/layers with reusable train/val splits
+  - `0.2 feature learning`: train per-hook SAE dictionaries with reconstruction+sparsity quality gates
+  - `0.3 causal validation`: latent suppression/amplification (encode-edit-decode) to test necessity/sufficiency on `A/G/S`
+  - `0.4 controls`: size-matched random-feature/random-direction controls (>=5) with mean/std and paired effect vs primary intervention
+  - `0.5 confound suppression`: constrained decoding + parser/runtime sanity checks to isolate syntax artifacts
+- completion criteria for this methodology:
+  - target factor, falsifier, stop condition, and non-target regression bound are declared before run
+  - fixed train/validation split manifests are frozen and reused
+  - candidate claim must beat random controls on target factor without major non-target regression
+  - deployment claim requires reproducibility under invariants
 
 ## literature-grounded execution (mandatory)
 - before implementing a rung, ground it in literature with at least one concrete anchor (method + venue/year) and one known limitation/failure mode, invoke the agent 'research-critic' to find literature/implementation and go off that.
@@ -68,13 +66,13 @@
   - `deployment`: validated and reproducible under invariants
 
 ## specialist-agent consultation protocol
-- the autonomous agent must consult specialists when blocked or when entering a new method family:
+- the autonomous agent must consult specialists when blocked or when control/falsifier design is weak:
   - `librarian`: literature grounding, prior methods, controls, known pitfalls
   - `oracle` (or `research-critic` if available): reviewer-style risk analysis, falsifiers, claim narrowing
   - `explore`: codebase implementation mapping and experiment integration points
   - optional non-conventional framing: `momus`
 - consultation trigger conditions:
-  - new method family or unclear implementation path
+  - unclear implementation path for localization/validation/controls
   - weak/uncertain falsifier or control design
   - repeated invalid runs or contradictory metrics
 - consultation outputs must be logged in provenance as: `question`, `answer summary`, `decision impact`
@@ -87,9 +85,9 @@
 
 ## autonomous decision protocol
 - loop: Plan -> Execute -> Verify -> Report -> Decide
-- Plan: choose next method by highest expected information gain under constraints
+- Plan: choose next step of the active methodology by highest expected information gain
 - Verify: enforce schema + key metrics before accepting run
-- Decide: continue until method-family coverage or hard stop
+- Decide: continue until active methodology completion criteria are met or hard stop
 - hard stop: environment failure, missing baseline pairing, or repeated invalid runs
 
 ## reporting contract (required per run)
