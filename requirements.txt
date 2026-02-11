@@ -7,3 +7,4 @@ numpy
 qwen-vl-utils
 beautifulsoup4
 lxml
+sae-lens

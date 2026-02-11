@@ -2,13 +2,21 @@ import ast
 import copy
 import hashlib
 import json
-import random
 import re
 from datetime import datetime, timezone
-from pathlib import Path
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
+
+# Core runtime utilities for MiniWob evaluation.
+#
+# This module intentionally keeps a small public surface:
+# - prompt construction
+# - model generation + optional hook steering
+# - lightweight post-hoc action/error classification
+#
+# BrowserGym already validates/executes actions. The extra parsing/classification
+# below is only for analysis metrics (A/G/S style error buckets), not execution.
 
 
 MODEL_MAP = {
@@ -16,6 +24,7 @@ MODEL_MAP = {
     "qwen3-1.7b": "Qwen/Qwen3-1.7B",
     "qwen3-4b": "Qwen/Qwen3-4B",
     "qwen3-8b": "Qwen/Qwen3-8B",
+    "gemma-2-2b": "google/gemma-2-2b",
 }
 
 LAYER_MAP = {
@@ -23,6 +32,7 @@ LAYER_MAP = {
     "qwen3-1.7b": 14,
     "qwen3-4b": 18,
     "qwen3-8b": 18,
+    "gemma-2-2b": 13,
 }
 
 SYSTEM_PROMPT = (
@@ -38,6 +48,8 @@ def get_action_set():
     if _ACTION_SET is None:
         from browsergym.core.action.highlevel import HighLevelActionSet
 
+        # Keep this permissive for generation; the environment still enforces
+        # execution validity on step().
         _ACTION_SET = HighLevelActionSet(
             subsets=["miniwob_all"],
             strict=False,
@@ -118,18 +130,6 @@ def derive_episode_seed(global_seed, namespace, task, episode_idx):
     return int(stable_hash(payload)[:8], 16) & 0x7FFFFFFF
 
 
-def list_miniwob_tasks():
-    import browsergym.miniwob  # noqa: F401
-    import gymnasium as gym
-
-    env_ids = [
-        env_id
-        for env_id in gym.envs.registry.keys()
-        if env_id.startswith("browsergym/miniwob.")
-    ]
-    return sorted(env_id.split("browsergym/miniwob.", 1)[1] for env_id in env_ids)
-
-
 def make_miniwob_env(task):
     import browsergym.miniwob  # noqa: F401
     import gymnasium as gym
@@ -138,40 +138,6 @@ def make_miniwob_env(task):
         f"browsergym/miniwob.{task}",
         action_mapping=get_action_set().to_python_code,
     )
-
-
-def resolve_tasks(tasks_arg="all", task_manifest_path=None):
-    if task_manifest_path and Path(task_manifest_path).exists():
-        payload = json.loads(Path(task_manifest_path).read_text(encoding="utf-8"))
-        task_list = payload["tasks"] if isinstance(payload, dict) else payload
-        tasks = [str(t) for t in task_list]
-        if tasks_arg != "all":
-            requested = [x.strip() for x in str(tasks_arg).split(",") if x.strip()]
-            tasks = requested
-        return tasks
-
-    tasks = (
-        list_miniwob_tasks()
-        if tasks_arg == "all"
-        else [x.strip() for x in str(tasks_arg).split(",") if x.strip()]
-    )
-    if task_manifest_path:
-        p = Path(task_manifest_path)
-        p.parent.mkdir(parents=True, exist_ok=True)
-        p.write_text(
-            json.dumps({"generated_at_utc": utc_now_iso(), "tasks": tasks}, indent=2)
-            + "\n",
-            encoding="utf-8",
-        )
-    return tasks
-
-
-def parse_layer_spec(spec):
-    s = str(spec).strip()
-    if "-" in s:
-        a, b = s.split("-", 1)
-        return list(range(int(a), int(b) + 1))
-    return [int(x.strip()) for x in s.split(",") if x.strip()]
 
 
 def get_layer(model_key, layer_arg):
@@ -212,6 +178,8 @@ def _looks_like_bid(value):
 
 
 def _parse_action_signature(action):
+    # Parse only enough structure for diagnostics.
+    # We do not use this parser to execute actions; BrowserGym handles execution.
     parsed = {"parse_ok": False, "action_type": "", "bids": [], "bid_required": False}
     raw = str(action or "").strip()
     if not raw:
@@ -249,6 +217,9 @@ def _parse_action_signature(action):
 
 
 def classify_action_step(action, error_text):
+    # Why this exists even with BrowserGym parsing:
+    # BrowserGym tells us whether step() fails, but this function buckets failures
+    # into action-type vs grounding vs syntax proxies for targeted analysis.
     sig = _parse_action_signature(action)
     parse_ok = sig["parse_ok"]
     has_bid = len(sig["bids"]) > 0 and any(str(x).strip() for x in sig["bids"])
@@ -303,6 +274,7 @@ def build_prompt(obs, max_elems=80, strict_action_prompt=False):
         prune_html,
     )
 
+    # We cap serialized context for predictable token usage in quick runs.
     dom_text = prune_html(flatten_dom_to_str(obs["dom_object"]))
     axtree_text = flatten_axtree_to_str(obs["axtree_object"])
     dom_lines = dom_text.splitlines()[: int(max_elems)]
