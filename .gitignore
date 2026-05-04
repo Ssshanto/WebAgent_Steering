@@ -4,12 +4,19 @@ finetuned_model/
 results.csv
 results/
 vectors/
+vectors_*/
 data/
 dataset_cache/
 local_run_log.md
 vectors/
 GEMINI.md
 presentation_tmp/
+
+# Colab and runtime state artifacts
+colab/
+runtime_state/
+*.queue_state.json
+.experiment_queue_state.json
 
 # Working notes and archives (keep local)
 docs/
@@ -19,3 +26,5 @@ archive/
 .vscode/
 .idea/
 *.log
+miniwob-plusplus/
+.sisyphus/

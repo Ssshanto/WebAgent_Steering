@@ -1,9 +1,8 @@
 torch
 transformers
+gymnasium
 browsergym-miniwob
 tqdm
-pillow
 numpy
-qwen-vl-utils
 beautifulsoup4
 lxml
